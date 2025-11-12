@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation & Blog</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <h1>Navigation</h1>
+
+            <nav>
+                <h2>Blog</h2>
+                <ul>
+                    <li>
+                            <li><a href="#" data-content="blog/extraction_quality_blogpost_no_code.html">Qwen30ba3b Performance</a></li>
+                    </li>
+                </ul>
+
+                <h2>Documentation</h2>
+                <ul>
+                    <li><a href="#" data-content="documentation/placeholder.html">placeholder</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content">
+            <div id="content-area">
+                <h1>Welcome</h1>
+                <p>Select a page from the sidebar to view its content.</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Load content dynamically
+        document.querySelectorAll('a[data-content]').forEach(link => {
+            link.addEventListener('click', async (e) => {
+                e.preventDefault();
+
+                const contentPath = link.getAttribute('data-content');
+                const contentArea = document.getElementById('content-area');
+
+                // Update active state
+                document.querySelectorAll('a[data-content]').forEach(l => l.classList.remove('active'));
+                link.classList.add('active');
+
+                try {
+                    const response = await fetch(contentPath);
+                    if (response.ok) {
+                        const html = await response.text();
+                        contentArea.innerHTML = html;
+                    } else {
+                        contentArea.innerHTML = '<h1>Error</h1><p>Content not found.</p>';
+                    }
+                } catch (error) {
+                    contentArea.innerHTML = '<h1>Error</h1><p>Failed to load content.</p>';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
