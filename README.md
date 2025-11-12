@@ -16,16 +16,8 @@ A self-hostable, mobile-first web app to create tables from images. It's 2025, s
 2. [Prerequisites](#prerequisites)
 
 3. [Installation](#installation)
-
-- 3.1 [Clone the Repository](#clone-the-repository)
-
-- 3.2 [Configure Environment](#configure-environment)
-
-- 3.3 [Start with Docker](#start-with-docker)
-
-4. [Getting Started](#getting-started)
-
-- 4.1 [Creating Your First Project](#creating-your-first-project)
+   
+5. [Getting Started](#getting-started)
 
 5. [AI Model Options](#ai-model-options)
 
@@ -37,17 +29,8 @@ A self-hostable, mobile-first web app to create tables from images. It's 2025, s
 
 6. [Development Setup](#development-setup)
 
-- 6.1 [Local Development](#local-development)
-
-- 6.2 [Running Development Servers](#running-development-servers)
-
 7. [Troubleshooting](#troubleshooting)
 
-- 7.1 [Poor Extraction Results](#poor-extraction-results)
-
-- 7.2 [Bounding Boxes Not Working](#bounding-boxes-not-working)
-
-- 7.3 [Rate Limiting Issues](#rate-limiting-issues)
 
   
 
