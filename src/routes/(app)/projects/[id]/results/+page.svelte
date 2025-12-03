@@ -6,19 +6,11 @@
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, isProjectLoading } from '$lib/stores/project-data';
-	import type { ImageBatchesResponse, ImagesResponse } from '$lib/pocketbase-types';
+	import type { ImageBatchesResponse, ImagesResponse, ExtractionRowsResponse } from '$lib/pocketbase-types';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/utils/toast';
-
-	interface ExtractionResult {
-		column_id: string;
-		column_name: string;
-		value: string | null;
-		image_index: number;
-		bbox_2d: [number, number, number, number];
-		confidence: number;
-	}
+	import type { ExtractionResult } from '$lib/types/extraction';
 
 	interface BatchWithData extends ImageBatchesResponse {
 		images?: ImagesResponse[];
@@ -32,9 +24,18 @@
 		description?: string;
 	}
 
+	interface ApprovedRow {
+		id: string;
+		batchId: string;
+		batchIdShort: string;
+		rowIndex: number;
+		created: string;
+		data: ExtractionResult[];
+	}
+
 	let { data }: { data: PageData } = $props();
 
-	let approvedBatches = $state<BatchWithData[]>([]);
+	let approvedRows = $state<ApprovedRow[]>([]);
 	let columns = $state<ColumnDefinition[]>([]);
 	let loadingProgress = $state({ current: 0, total: 0 });
 
@@ -47,7 +48,7 @@
 				columns = $currentProject.settings.columns;
 			}
 
-			await loadApprovedBatches();
+			await loadApprovedRows();
 		} catch (error) {
 			console.error('Failed to load project:', error);
 			toast.error(t('images.results.toast.failed_to_load'));
@@ -55,54 +56,55 @@
 		}
 	});
 
-	async function loadApprovedBatches() {
+	async function loadApprovedRows() {
 		try {
-			// Load all approved batches for complete export
-			const batchList = await pb.collection('image_batches').getFullList<ImageBatchesResponse>({
+			// NEW: Load all approved extraction_rows for the project
+			const rows = await pb.collection('extraction_rows').getFullList<ExtractionRowsResponse>({
 				filter: `project = '${data.projectId}' && status = 'approved'`,
-				sort: '-created'
+				sort: '-id',
+				expand: 'batch'
 			});
 
-			loadingProgress.total = batchList.length;
-			approvedBatches = [];
+			loadingProgress.total = rows.length;
+			approvedRows = rows.map((row, index) => {
+				loadingProgress.current = index + 1;
+				return {
+					id: row.id,
+					batchId: Array.isArray(row.batch) ? row.batch[0] : row.batch,
+					batchIdShort: (Array.isArray(row.batch) ? row.batch[0] : row.batch).slice(0, 8),
+					rowIndex: row.row_index,
+					created: row.created || '',
+					data: (row.row_data as any) || []
+				};
+			});
 
-			// Load images for each batch in chunks to avoid overwhelming the browser
-			for (let i = 0; i < batchList.length; i++) {
-				const batch = batchList[i];
-				const images = await pb.collection('images').getFullList<ImagesResponse>({
-					filter: `batch = '${batch.id}'`,
-					sort: 'order',
-					requestKey: `images_${batch.id}`
-				});
-				approvedBatches.push({ ...batch, images });
-				loadingProgress.current = i + 1;
-			}
+			console.log(`Loaded ${approvedRows.length} approved extraction rows`);
 		} catch (error) {
-			console.error('Failed to load approved batches:', error);
+			console.error('Failed to load approved rows:', error);
 			toast.error(t('images.results.toast.failed_to_load'));
 		}
 	}
 
-	function getValueForColumn(batch: BatchWithData, columnId: string): string {
-		if (!batch.processed_data) return '';
-		const extraction = batch.processed_data.extractions.find(e => e.column_id === columnId);
+	function getValueForColumn(row: ApprovedRow, columnId: string): string {
+		const extraction = row.data.find(e => e.column_id === columnId);
 		return extraction?.value ?? '';
 	}
 
 	function exportToCSV() {
-		if (approvedBatches.length === 0 || columns.length === 0) return;
+		if (approvedRows.length === 0 || columns.length === 0) return;
 
-		const headers = ['Batch ID', 'Created', ...columns.map(col => col.name)];
-		const rows = approvedBatches.map(batch => {
-			const row = [
-				batch.id.slice(0, 8),
-				new Date(batch.created).toLocaleDateString(),
-				...columns.map(col => getValueForColumn(batch, col.id))
+		const headers = ['Batch ID', 'Row #', 'Created', ...columns.map(col => col.name)];
+		const csvRows = approvedRows.map(row => {
+			const csvRow = [
+				row.batchIdShort,
+				String(row.rowIndex + 1), // 1-based for humans
+				new Date(row.created).toLocaleDateString(),
+				...columns.map(col => getValueForColumn(row, col.id))
 			];
-			return row.map(val => `"${val}"`).join(',');
+			return csvRow.map(val => `"${val}"`).join(',');
 		});
 
-		const csvContent = [headers.map(h => `"${h}"`).join(','), ...rows].join('\n');
+		const csvContent = [headers.map(h => `"${h}"`).join(','), ...csvRows].join('\n');
 
 		const blob = new Blob([csvContent], { type: 'text/csv' });
 		const url = URL.createObjectURL(blob);
@@ -133,7 +135,7 @@
 			<div class="flex-1">
 				<h2 class="text-2xl font-bold tracking-tight">{t('images.results.title')}</h2>
 			</div>
-			{#if approvedBatches.length > 0}
+			{#if approvedRows.length > 0}
 				<Button onclick={exportToCSV} variant="outline" size="sm">
 					<Download class="h-4 w-4 sm:mr-2" />
 					<span class="hidden sm:inline">{t('images.results.export_all')}</span>
@@ -141,7 +143,7 @@
 			{/if}
 		</div>
 
-		{#if approvedBatches.length === 0}
+		{#if approvedRows.length === 0}
 			<div class="flex items-center justify-center p-12 text-muted-foreground">
 				<p>{t('images.results.empty_state')}</p>
 			</div>
@@ -151,6 +153,7 @@
 					<Table.Header>
 						<Table.Row>
 							<Table.Head>Batch</Table.Head>
+							<Table.Head>Row #</Table.Head>
 							<Table.Head>Created</Table.Head>
 							{#each columns as column}
 								<Table.Head>{column.name}</Table.Head>
@@ -158,12 +161,13 @@
 						</Table.Row>
 					</Table.Header>
 					<Table.Body>
-						{#each approvedBatches as batch}
+						{#each approvedRows as row}
 							<Table.Row>
-								<Table.Cell class="font-mono text-xs">{batch.id.slice(0, 8)}</Table.Cell>
-								<Table.Cell class="text-xs">{new Date(batch.created).toLocaleDateString()}</Table.Cell>
+								<Table.Cell class="font-mono text-xs">{row.batchIdShort}</Table.Cell>
+								<Table.Cell class="text-xs">{row.rowIndex + 1}</Table.Cell>
+								<Table.Cell class="text-xs">{new Date(row.created).toLocaleDateString()}</Table.Cell>
 								{#each columns as column}
-									<Table.Cell>{getValueForColumn(batch, column.id) || 'N/A'}</Table.Cell>
+									<Table.Cell>{getValueForColumn(row, column.id) || 'N/A'}</Table.Cell>
 								{/each}
 							</Table.Row>
 						{/each}

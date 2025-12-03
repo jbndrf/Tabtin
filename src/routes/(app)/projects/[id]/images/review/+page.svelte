@@ -40,6 +40,8 @@
 	let columns = $state<ColumnDefinition[]>([]);
 	let currentBatchIndex = $state(0);
 	let currentImageIndex = $state(0);
+	let currentRowIndex = $state(0);
+	let extractionRows = $state<any[]>([]);
 	let isLoading = $state(true);
 	let loadingBatchImages = $state(false);
 	let canvasElements = $state<HTMLCanvasElement[]>([]);
@@ -138,7 +140,7 @@
 				// Load all batches that are in review status
 				allBatches = await pb.collection('image_batches').getFullList<ImageBatchesResponse>({
 					filter: `project = '${data.projectId}' && status = 'review'`,
-					sort: '-created',
+					sort: '-id',
 					requestKey: `review_batches_${data.projectId}`
 				});
 
@@ -177,6 +179,14 @@
 	let canvasKey = $state(0);
 
 	$effect(() => {
+		const batch = getCurrentBatch();
+		console.log('Render effect check:', {
+			canvasElementsLength: canvasElements.length,
+			imageElementsLength: imageElements.length,
+			batchesLength: batches.length,
+			batchImages: batch?.images?.length,
+			imageUrls: batch?.images?.map(img => getImageUrl(img))
+		});
 		if (canvasElements.length > 0 && imageElements.length > 0 && batches.length > 0) {
 			renderAllCanvases();
 		}
@@ -251,6 +261,16 @@
 				requestKey: `review_images_${batch.id}`
 			});
 
+			// Load extraction_rows for this batch
+			const rows = await pb.collection('extraction_rows').getFullList({
+				filter: `batch = '${batch.id}' && status = 'review'`,
+				sort: 'row_index',
+				requestKey: `review_extraction_rows_${batch.id}`
+			});
+
+			extractionRows = rows;
+			currentRowIndex = 0;
+
 			// Add to batches array if not already loaded
 			if (!batches[batchIndex]) {
 				batches[batchIndex] = { ...batch, images };
@@ -277,17 +297,21 @@
 		return pb.files.getURL(image, image.image);
 	}
 
+	function getCurrentRow() {
+		return extractionRows[currentRowIndex];
+	}
+
 	function getCurrentExtractions(): ExtractionResult[] {
-		const batch = getCurrentBatch();
-		if (!batch?.processed_data || typeof batch.processed_data !== 'object' || !('extractions' in batch.processed_data)) return [];
-		const extractions = batch.processed_data.extractions as ExtractionResult[];
+		const row = getCurrentRow();
+		if (!row?.row_data) return [];
+		const extractions = row.row_data as ExtractionResult[];
 		return extractions.filter((e: ExtractionResult) => e.image_index === currentImageIndex);
 	}
 
 	function getAllExtractions(): ExtractionResult[] {
-		const batch = getCurrentBatch();
-		if (!batch?.processed_data || typeof batch.processed_data !== 'object' || !('extractions' in batch.processed_data)) return [];
-		return batch.processed_data.extractions as ExtractionResult[];
+		const row = getCurrentRow();
+		if (!row?.row_data) return [];
+		return row.row_data as ExtractionResult[];
 	}
 
 	// Convert bbox coordinates based on selected format
@@ -331,7 +355,8 @@
 	}
 
 	function getColumnValue(columnId: string): { value: string | null; confidence: number; redone?: boolean } | null {
-		const extraction = getAllExtractions().find(e => e.column_id === columnId);
+		const allExtractions = getAllExtractions();
+		const extraction = allExtractions.find(e => e.column_id === columnId);
 		return extraction ? { value: extraction.value, confidence: extraction.confidence, redone: extraction.redone } : null;
 	}
 
@@ -440,9 +465,10 @@
 			const width = x2 - x1;
 			const height = y2 - y1;
 
-			// Draw bounding box with confidence-based color
-			ctx.strokeStyle = extraction.confidence >= 0.8 ? '#22c55e' : extraction.confidence >= 0.5 ? '#eab308' : '#ef4444';
-			ctx.lineWidth = 2 * zoom;
+			// Draw bounding box - use orange for current row, confidence colors for others
+			// Current row is highlighted in orange/amber
+			ctx.strokeStyle = '#f97316'; // Orange for current row
+			ctx.lineWidth = 3 * zoom; // Thicker line for current row
 			ctx.strokeRect(x1, y1, width, height);
 
 			// Draw label if enabled
@@ -543,8 +569,23 @@
 		ctx.restore();
 	}
 
-	function handleImageLoad() {
+	function handleImageLoad(event: Event) {
+		const img = event.target as HTMLImageElement;
+		console.log('Image loaded:', {
+			src: img.src.substring(img.src.lastIndexOf('/') + 1),
+			naturalWidth: img.naturalWidth,
+			naturalHeight: img.naturalHeight,
+			complete: img.complete
+		});
 		renderAllCanvases();
+	}
+
+	function handleImageError(event: Event) {
+		const img = event.target as HTMLImageElement;
+		console.error('Image failed to load:', {
+			src: img.src,
+			complete: img.complete
+		});
 	}
 
 	function handleTouchStart(e: TouchEvent) {
@@ -654,18 +695,42 @@
 	}
 
 	async function handleAccept() {
-		const batch = getCurrentBatch();
-		if (!batch) return;
+		const row = getCurrentRow();
+		if (!row) return;
 
 		try {
+			const now = new Date().toISOString();
+			const batch = getCurrentBatch();
+			if (!batch) return;
+
+			// For multi-row batches, approve ALL remaining rows at once
+			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
+				filter: `batch = '${batch.id}' && status = 'review'`
+			});
+
+			if (allRemainingRows.length > 0) {
+				// Approve all remaining rows in parallel
+				await Promise.all(
+					allRemainingRows.map(r =>
+						pb.collection('extraction_rows').update(r.id, {
+							status: 'approved',
+							approved_at: now
+						})
+					)
+				);
+
+				toast.success(t('images.review.toast.accepted') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
+			}
+
+			// All rows approved, update batch status
 			await pb.collection('image_batches').update(batch.id, {
 				status: 'approved'
 			});
 
-			toast.success(t('images.review.toast.accepted'));
+			// Move to next batch
 			moveToNextBatch();
 		} catch (error) {
-			console.error('Failed to accept batch:', error);
+			console.error('Failed to accept row:', error);
 			toast.error(t('images.review.toast.failed_to_accept'));
 			resetCard();
 			isAnimating = false;
@@ -673,18 +738,47 @@
 	}
 
 	async function handleDecline() {
-		const batch = getCurrentBatch();
-		if (!batch) return;
+		const row = getCurrentRow();
+		if (!row) return;
 
 		try {
-			await pb.collection('image_batches').update(batch.id, {
-				status: 'failed'
+			const now = new Date().toISOString();
+			const batch = getCurrentBatch();
+			if (!batch) return;
+
+			// For multi-row batches, decline ALL remaining rows at once
+			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
+				filter: `batch = '${batch.id}' && status = 'review'`
 			});
 
-			toast.success(t('images.review.toast.declined'));
+			if (allRemainingRows.length > 0) {
+				// Decline all remaining rows in parallel
+				await Promise.all(
+					allRemainingRows.map(r =>
+						pb.collection('extraction_rows').update(r.id, {
+							status: 'deleted',
+							deleted_at: now
+						})
+					)
+				);
+
+				toast.success(t('images.review.toast.declined') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
+			}
+
+			// Check if any rows were approved before declining
+			const approvedRows = await pb.collection('extraction_rows').getFullList({
+				filter: `batch = '${batch.id}' && status = 'approved'`
+			});
+
+			// Update batch status based on whether any rows were approved
+			await pb.collection('image_batches').update(batch.id, {
+				status: approvedRows.length > 0 ? 'approved' : 'failed'
+			});
+
+			// Move to next batch
 			moveToNextBatch();
 		} catch (error) {
-			console.error('Failed to decline batch:', error);
+			console.error('Failed to decline row:', error);
 			toast.error(t('images.review.toast.failed_to_decline'));
 			resetCard();
 			isAnimating = false;
@@ -742,6 +836,55 @@
 		const batch = getCurrentBatch();
 		if (!batch?.images || currentImageIndex >= batch.images.length - 1) return;
 		currentImageIndex++;
+	}
+
+	function getMostCommonImageIndexForRow(rowData: ExtractionResult[]): number {
+		if (!rowData || rowData.length === 0) return 0;
+
+		// Count occurrences of each image_index
+		const imageIndexCounts = new Map<number, number>();
+		rowData.forEach(extraction => {
+			const count = imageIndexCounts.get(extraction.image_index) || 0;
+			imageIndexCounts.set(extraction.image_index, count + 1);
+		});
+
+		// Find the image_index with the most fields
+		let maxCount = 0;
+		let mostCommonIndex = 0;
+		imageIndexCounts.forEach((count, imageIndex) => {
+			if (count > maxCount) {
+				maxCount = count;
+				mostCommonIndex = imageIndex;
+			}
+		});
+
+		return mostCommonIndex;
+	}
+
+	function handlePreviousRow() {
+		if (currentRowIndex === 0) return;
+		currentRowIndex--;
+
+		// Jump to the image with the most fields for this row
+		const row = getCurrentRow();
+		if (row?.row_data) {
+			currentImageIndex = getMostCommonImageIndexForRow(row.row_data);
+		}
+
+		renderAllCanvases();
+	}
+
+	function handleNextRow() {
+		if (currentRowIndex >= extractionRows.length - 1) return;
+		currentRowIndex++;
+
+		// Jump to the image with the most fields for this row
+		const row = getCurrentRow();
+		if (row?.row_data) {
+			currentImageIndex = getMostCommonImageIndexForRow(row.row_data);
+		}
+
+		renderAllCanvases();
 	}
 
 	// Image carousel swipe handlers
@@ -1697,7 +1840,9 @@
 											src={getImageUrl(image)}
 											alt="Image {idx + 1}"
 											class="hidden"
+											crossorigin="anonymous"
 											onload={handleImageLoad}
+											onerror={handleImageError}
 										/>
 									</div>
 								{/each}
@@ -1867,6 +2012,38 @@
 						ontouchend={(e) => e.stopPropagation()}
 						onmousedown={(e) => e.stopPropagation()}
 					>
+						<!-- Row navigation -->
+						{#if extractionRows.length > 1}
+							<div class="border-b px-4 py-3 bg-muted/30">
+								<div class="flex items-center justify-between">
+									<button
+										onclick={(e) => {
+											e.stopPropagation();
+											handlePreviousRow();
+										}}
+										disabled={currentRowIndex === 0}
+										class="flex h-9 w-9 items-center justify-center rounded-md bg-background border shadow-sm hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+									</button>
+									<div class="flex flex-col items-center">
+										<span class="text-sm font-medium">Row {currentRowIndex + 1} of {extractionRows.length}</span>
+										<span class="text-xs text-muted-foreground">Use buttons to navigate</span>
+									</div>
+									<button
+										onclick={(e) => {
+											e.stopPropagation();
+											handleNextRow();
+										}}
+										disabled={currentRowIndex >= extractionRows.length - 1}
+										class="flex h-9 w-9 items-center justify-center rounded-md bg-background border shadow-sm hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+									</button>
+								</div>
+							</div>
+						{/if}
+
 						<!-- Extraction cards -->
 						<div class="flex-1 overflow-y-auto px-4 py-4">
 							{#key canvasKey}

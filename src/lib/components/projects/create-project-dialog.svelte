@@ -39,11 +39,14 @@
 		if (!$currentUser?.id) return;
 
 		try {
-			projects = await pb.collection('projects').getFullList<ProjectsResponse>({
-				sort: '-created',
+			// Use getList with high perPage instead of getFullList to avoid skipTotal parameter issue
+			// Note: Sort by -id instead of -created since created field may not exist in older schemas
+			const result = await pb.collection('projects').getList<ProjectsResponse>(1, 500, {
+				sort: '-id',
 				filter: `user = '${$currentUser.id}'`,
 				requestKey: 'create_dialog_projects'
 			});
+			projects = result.items;
 		} catch (error) {
 			console.error('Failed to load projects:', error);
 		}

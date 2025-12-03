@@ -61,7 +61,7 @@
 			// Load all batches for complete gallery
 			const batchList = await pb.collection('image_batches').getFullList<ImageBatchesResponse>({
 				filter: `project = '${data.projectId}'`,
-				sort: '-created'
+				sort: '-id'
 			});
 
 			// Load first image for each batch in chunks to avoid overwhelming the browser
@@ -339,7 +339,7 @@
 			// Get batches with the specified status
 			const batches = await pb.collection('image_batches').getFullList({
 				filter: `project = "${data.projectId}" && status = "${status}"`,
-				sort: '+created'
+				sort: '+id'
 			});
 
 			if (batches.length === 0) {
@@ -395,7 +395,7 @@
 			// Get all batches for this project
 			const batches = await pb.collection('image_batches').getFullList({
 				filter: `project = "${data.projectId}"`,
-				sort: '+created'
+				sort: '+id'
 			});
 
 			if (batches.length === 0) {
@@ -683,7 +683,7 @@
 								<!-- Date Overlay -->
 								<div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
 									<p class="text-xs text-white">
-										{new Date(batch.created).toLocaleDateString()}
+										{batch.created ? new Date(batch.created).toLocaleDateString() : 'No date'}
 									</p>
 								</div>
 							</button>

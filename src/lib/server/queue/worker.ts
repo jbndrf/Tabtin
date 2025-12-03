@@ -4,6 +4,7 @@ import PocketBase from 'pocketbase';
 import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
+import { convertPdfToImages, isPdfFile } from '../pdf-converter';
 
 export class QueueWorker {
 	private queueManager: QueueManager;
@@ -123,15 +124,45 @@ export class QueueWorker {
 				sort: '+order'
 			});
 
-			// Convert images to base64
-			const imageDataUrls = await Promise.all(
-				images.map(async (img) => {
-					const url = this.pb.files.getURL(img, img.image);
-					const response = await fetch(url);
-					const blob = await response.blob();
-					return this.blobToBase64DataUrl(blob);
-				})
-			);
+			// Convert images to base64 and collect extracted text
+			// Handle PDFs by converting them to images first
+			const imageData: Array<{ dataUrl: string; extractedText: string | null }> = [];
+
+			for (const img of images) {
+				const url = this.pb.files.getURL(img, img.image);
+				const response = await fetch(url);
+				const blob = await response.blob();
+
+				// Check if this is a PDF file
+				if (isPdfFile(img.image)) {
+					console.log(`Converting PDF to images: ${img.image}`);
+
+					// Convert blob to buffer
+					const arrayBuffer = await blob.arrayBuffer();
+					const buffer = Buffer.from(arrayBuffer);
+
+					// Convert PDF to images at 600 DPI
+					const convertedPages = await convertPdfToImages(buffer, img.image);
+
+					// Add each page as a separate image
+					for (const page of convertedPages) {
+						const pageDataUrl = `data:${page.mimeType};base64,${page.buffer.toString('base64')}`;
+						imageData.push({
+							dataUrl: pageDataUrl,
+							extractedText: page.extractedText || null
+						});
+					}
+
+					console.log(`Converted PDF ${img.image} to ${convertedPages.length} images`);
+				} else {
+					// Regular image - just convert to base64
+					const dataUrl = await this.blobToBase64DataUrl(blob);
+					imageData.push({
+						dataUrl,
+						extractedText: img.extracted_text || null
+					});
+				}
+			}
 
 			// Generate prompt
 			const prompt = this.generatePrompt(
@@ -139,6 +170,25 @@ export class QueueWorker {
 				settings.columns,
 				settings.coordinateFormat
 			);
+
+			// Build content array with images and extracted text
+			const contentArray: any[] = [{ type: 'text', text: prompt }];
+
+			imageData.forEach((img, index) => {
+				// Add the image
+				contentArray.push({
+					type: 'image_url',
+					image_url: { url: img.dataUrl }
+				});
+
+				// Add extracted text if available
+				if (img.extractedText && img.extractedText.trim()) {
+					contentArray.push({
+						type: 'text',
+						text: `[Extracted text from page ${index + 1}]: ${img.extractedText}`
+					});
+				}
+			});
 
 			// Call LLM API using connection pool
 			const result = await this.connectionPool.execute(async () => {
@@ -153,13 +203,7 @@ export class QueueWorker {
 						messages: [
 							{
 								role: 'user',
-								content: [
-									{ type: 'text', text: prompt },
-									...imageDataUrls.map((url) => ({
-										type: 'image_url',
-										image_url: { url }
-									}))
-								]
+								content: contentArray
 							}
 						],
 						temperature: 0.1,
@@ -231,10 +275,49 @@ export class QueueWorker {
 			console.log('Final parsedData:', JSON.stringify(parsedData, null, 2));
 			console.log('=== End Debugging ===');
 
-			// Update batch with results
+			// NEW: Check project extraction mode
+			const extractionMode = project.extraction_mode || settings.extraction_mode || 'single_row';
+			console.log(`Extraction mode: ${extractionMode}`);
+
+			let extractedRows: any[][];
+
+			if (extractionMode === 'multi_row') {
+				// Parse multi-row response
+				extractedRows = this.parseMultiRowResponse(parsedData, settings.columns);
+				console.log(`Parsed ${extractedRows.length} rows from LLM response`);
+			} else {
+				// Single-row mode: wrap all extractions as one row
+				extractedRows = [parsedData];
+				console.log('Single-row mode: treating all extractions as one row');
+			}
+
+			// Create extraction_rows records for each detected row
+			// NOTE: PocketBase treats 0 as blank for required numeric fields, so we use 1-based indexing
+			for (let rowIndex = 0; rowIndex < extractedRows.length; rowIndex++) {
+				try {
+					const recordData = {
+						batch: batchId,
+						project: projectId,
+						row_index: rowIndex + 1, // 1-based indexing (PocketBase treats 0 as blank)
+						row_data: extractedRows[rowIndex],
+						status: 'review'
+					};
+					console.log(`Creating extraction_row ${rowIndex + 1}:`, JSON.stringify(recordData, null, 2));
+
+					await this.pb.collection('extraction_rows').create(recordData);
+					console.log(`Created extraction_row ${rowIndex + 1} with ${extractedRows[rowIndex].length} extractions`);
+				} catch (err: any) {
+					console.error(`Failed to create extraction_row ${rowIndex + 1}:`, err);
+					console.error('Error details:', JSON.stringify(err.response, null, 2));
+					throw err;
+				}
+			}
+
+			// Update batch with metadata (keep processed_data for backward compatibility during transition)
 			await this.pb.collection('image_batches').update(batchId, {
 				status: 'review',
-				processed_data: { extractions: parsedData },
+				processed_data: { extractions: parsedData }, // Keep for backward compatibility
+				row_count: extractedRows.length,
 				processing_completed: new Date().toISOString()
 			});
 
@@ -299,7 +382,7 @@ export class QueueWorker {
 	}
 
 	private async processRedo(job: QueueJob): Promise<void> {
-		const { batchId, projectId, redoColumnIds, croppedImageIds, sourceImageIds } = job.data as any;
+		const { batchId, projectId, rowIndex, redoColumnIds, croppedImageIds, sourceImageIds } = job.data as any;
 		const startTime = Date.now();
 
 		try {
@@ -311,12 +394,19 @@ export class QueueWorker {
 				expand: 'images'
 			});
 
-			// Separate correct and redo extractions
-			const allExtractions = batch.processed_data.extractions;
+			// NEW: Load the specific row to redo
+			const existingRow = await this.pb.collection('extraction_rows').getFirstListItem(
+				`batch = "${batchId}" && row_index = ${rowIndex}`
+			);
+
+			// Separate correct and redo extractions for THIS ROW only
+			const allExtractions = existingRow.row_data as any[];
 			const correctExtractions = allExtractions.filter(
 				(e: any) => !redoColumnIds.includes(e.column_id)
 			);
 			const redoColumns = settings.columns.filter((c: any) => redoColumnIds.includes(c.id));
+
+			console.log(`Processing redo for batch ${batchId}, row ${rowIndex}, columns:`, redoColumnIds);
 
 			// Create a mapping from LLM image_index (0, 1, 2...) to the actual cropped image ID
 			const imageIndexToCroppedId: string[] = [];
@@ -478,12 +568,20 @@ export class QueueWorker {
 			// Merge extractions
 			const mergedExtractions = [...correctExtractions, ...redoExtractions];
 
-			// Update batch
+			// NEW: Update only the specific row
+			await this.pb.collection('extraction_rows').update(existingRow.id, {
+				row_data: mergedExtractions,
+				status: 'review'
+			});
+
+			// Also update batch (backward compatibility)
+			// Note: For multi-row batches, this doesn't fully represent all rows, but kept for transition
 			await this.pb.collection('image_batches').update(batchId, {
-				processed_data: { extractions: mergedExtractions },
 				status: 'review',
 				redo_processed_at: new Date().toISOString()
 			});
+
+			console.log(`Updated extraction_row ${existingRow.id} with ${mergedExtractions.length} total extractions`);
 
 			// Record metrics
 			const endTime = Date.now();
@@ -849,6 +947,71 @@ export class QueueWorker {
 		console.log('--- End transformMixedFormat Debug ---');
 
 		return extractions;
+	}
+
+	private parseMultiRowResponse(llmResponse: any, columns: any[]): any[][] {
+		console.log('=== parseMultiRowResponse Debug ===');
+		console.log('Input type:', Array.isArray(llmResponse) ? 'array' : typeof llmResponse);
+
+		// If llmResponse is already in array format
+		if (Array.isArray(llmResponse)) {
+			// Check if first element has row_index field
+			if (llmResponse.length > 0 && llmResponse[0] && typeof llmResponse[0].row_index === 'number') {
+				console.log('Detected format: Flat array with row_index field');
+
+				// Group by row_index
+				const groupedByRow = new Map<number, any[]>();
+				for (const extraction of llmResponse) {
+					const rowIdx = extraction.row_index || 0;
+					if (!groupedByRow.has(rowIdx)) {
+						groupedByRow.set(rowIdx, []);
+					}
+					groupedByRow.get(rowIdx)!.push(extraction);
+				}
+
+				// Convert to array of arrays, sorted by row_index
+				const rows = Array.from(groupedByRow.entries())
+					.sort((a, b) => a[0] - b[0])
+					.map(([_, extractions]) => extractions);
+
+				console.log(`Grouped into ${rows.length} rows`);
+				console.log('=== End parseMultiRowResponse Debug ===');
+				return rows;
+			}
+
+			// Otherwise, treat entire array as single row
+			console.log('Detected format: Array without row_index (single row)');
+			console.log('=== End parseMultiRowResponse Debug ===');
+			return [llmResponse];
+		}
+
+		// If llmResponse has a 'rows' key
+		if (llmResponse && typeof llmResponse === 'object' && 'rows' in llmResponse) {
+			console.log('Detected format: Nested structure with "rows" key');
+			const rows = llmResponse.rows;
+
+			if (!Array.isArray(rows)) {
+				console.log('rows key is not an array, treating as single row');
+				console.log('=== End parseMultiRowResponse Debug ===');
+				return [this.transformMixedFormat(rows, columns)];
+			}
+
+			// Process each row
+			const processedRows = rows.map((row: any) => {
+				if (Array.isArray(row)) return row;
+				if (row.fields) return row.fields;
+				return this.transformMixedFormat(row, columns);
+			});
+
+			console.log(`Processed ${processedRows.length} rows`);
+			console.log('=== End parseMultiRowResponse Debug ===');
+			return processedRows;
+		}
+
+		// Unknown format - treat as single row
+		console.log('Detected format: Unknown (treating as single row)');
+		console.log('=== End parseMultiRowResponse Debug ===');
+		return [this.transformMixedFormat(llmResponse, columns)];
 	}
 
 	private sleep(ms: number): Promise<void> {

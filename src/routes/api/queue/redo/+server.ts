@@ -6,14 +6,14 @@ import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
-		const { batchId, projectId, redoColumnIds, croppedImageIds, sourceImageIds, priority = 5 } =
+		const { batchId, projectId, rowIndex = 0, redoColumnIds, croppedImageIds, sourceImageIds, priority = 5 } =
 			await request.json();
 
-		if (!batchId || !projectId || !redoColumnIds || !croppedImageIds) {
+		if (!batchId || !projectId || rowIndex === undefined || !redoColumnIds || !croppedImageIds) {
 			return json(
 				{
 					success: false,
-					error: 'Missing required fields'
+					error: 'Missing required fields (batchId, projectId, rowIndex, redoColumnIds, croppedImageIds required)'
 				},
 				{ status: 400 }
 			);
@@ -26,6 +26,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			{
 				batchId,
 				projectId,
+				rowIndex, // NEW: Which row to redo
 				redoColumnIds,
 				croppedImageIds,
 				sourceImageIds // Pass source image IDs to the worker

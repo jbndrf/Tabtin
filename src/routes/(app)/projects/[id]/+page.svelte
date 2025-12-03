@@ -64,7 +64,7 @@
 			// Load pending batches and enqueue them for automatic processing
 			const pendingBatches = await pb.collection('image_batches').getFullList({
 				filter: `project = "${data.projectId}" && status = "pending"`,
-				sort: '+created'
+				sort: '+id'
 			});
 
 			if (pendingBatches.length > 0) {

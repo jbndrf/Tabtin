@@ -35,7 +35,7 @@ export const GET: RequestHandler = async ({ url }) => {
 		// Fetch all metrics
 		const metrics = await pb.collection('processing_metrics').getFullList({
 			filter: filter || undefined,
-			sort: '-created'
+			sort: '-id'
 		});
 
 		// Calculate statistics

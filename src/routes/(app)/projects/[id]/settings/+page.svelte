@@ -77,6 +77,9 @@
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
 
+	// Extraction mode setting
+	let extractionMode = $state<'single_row' | 'multi_row'>('single_row');
+
 	// Load project data on mount
 	onMount(async () => {
 		// Load project from store (will use cache if available)
@@ -142,6 +145,9 @@
 			// Load rate limiting settings
 			requestsPerMinute = settings.requestsPerMinute || 15;
 			enableParallelRequests = settings.enableParallelRequests || false;
+
+			// Load extraction mode from project root (not settings)
+			extractionMode = $currentProject.extraction_mode || 'single_row';
 
 			if (settings.columns && settings.columns.length > 0) {
 				columns = settings.columns.map((col: any) => ({
@@ -306,6 +312,7 @@
 
 			await pb.collection('projects').update(data.projectId, {
 				name: projectName,
+				extraction_mode: extractionMode,
 				settings
 			});
 
@@ -412,6 +419,44 @@
 						placeholder={t('project.settings.basic.description_placeholder')}
 						rows={3}
 					/>
+				</div>
+
+				<div class="space-y-2">
+					<div class="flex items-center justify-between">
+						<Label for="extractionMode">Extraction Mode</Label>
+						<Tooltip.Provider>
+							<Tooltip.Root>
+								<Tooltip.Trigger asChild>
+									{#snippet child({ props })}
+										<button type="button" {...props} class="text-muted-foreground hover:text-foreground">
+											<HelpCircle class="h-4 w-4" />
+										</button>
+									{/snippet}
+								</Tooltip.Trigger>
+								<Tooltip.Content side="left" class="max-w-xs">
+									<p class="text-sm">
+										<strong>Single Row:</strong> Extract one record per document (invoices, receipts).<br/>
+										<strong>Multi-Row:</strong> Extract multiple records from one document (bank statements with multiple transactions).
+									</p>
+								</Tooltip.Content>
+							</Tooltip.Root>
+						</Tooltip.Provider>
+					</div>
+					<select
+						id="extractionMode"
+						bind:value={extractionMode}
+						class="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<option value="single_row">Single Row (Default)</option>
+						<option value="multi_row">Multi-Row (Bank Statements)</option>
+					</select>
+					<p class="text-xs text-muted-foreground">
+						{#if extractionMode === 'single_row'}
+							Extract one record per document. Best for invoices, receipts, and forms.
+						{:else}
+							Extract multiple records from each document. Best for bank statements and transaction lists.
+						{/if}
+					</p>
 				</div>
 			</div>
 
@@ -636,8 +681,14 @@
 						bind:value={selectedPreset}
 						class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
-						<option value="qwen3vl">Qwen3 VL</option>
-						<option value="gemini2">Gemini 2.0</option>
+						<optgroup label="Single-Row Extraction">
+							<option value="qwen3vl">Qwen3 VL</option>
+							<option value="gemini2">Gemini 2.0</option>
+						</optgroup>
+						<optgroup label="Multi-Row Extraction (Bank Statements)">
+							<option value="qwen3vl_multirow">Qwen3 VL (Multi-Row)</option>
+							<option value="gemini2_multirow">Gemini 2.0 (Multi-Row)</option>
+						</optgroup>
 					</select>
 					<p class="text-xs text-muted-foreground">
 						{t('project.settings.prompts.preset_auto_apply')}

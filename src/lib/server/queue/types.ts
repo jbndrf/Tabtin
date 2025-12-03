@@ -32,6 +32,7 @@ export interface ReprocessBatchJobData {
 export interface ProcessRedoJobData {
 	batchId: string;
 	projectId: string;
+	rowIndex: number; // Which row to redo (0-based index)
 	redoColumnIds: string[];
 	croppedImageIds: Record<string, string>;
 	sourceImageIds?: Record<string, string>; // Maps column IDs to source image IDs

@@ -175,7 +175,7 @@ export class QueueManager {
 
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
 			filter,
-			sort: '-created'
+			sort: '-id'
 		});
 
 		return records.map(this.mapRecordToJob);

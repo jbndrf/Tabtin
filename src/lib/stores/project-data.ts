@@ -142,7 +142,7 @@ function createProjectDataStore() {
 					// Load only the most recent 25 batches
 					pb.collection('image_batches').getList<ImageBatchesResponse>(1, 25, {
 						filter: `project = '${projectId}'`,
-						sort: '-created',
+						sort: '-id',
 						requestKey: `batches_list_${projectId}`
 					})
 				]);

@@ -1,27 +1,32 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Camera, Upload, X, Trash2 } from 'lucide-svelte';
+	import { Camera, Upload, X, Trash2, FileText } from 'lucide-svelte';
 	import { t } from '$lib/i18n';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { pb } from '$lib/stores/auth';
-	// Queue is now handled server-side
+	import { toast } from '$lib/utils/toast';
+
+	// Helper to check if file is PDF
+	function isPdfFile(file: File): boolean {
+		return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+	}
 
 	let projectId = $page.params.id as string;
 
 	// State for managing images
-	let selectedImages = $state<{ id: string; url: string; file: File }[]>([]);
+	let selectedImages = $state<{ id: string; url: string; file: File; isPdf?: boolean }[]>([]);
 	let fileInput: HTMLInputElement;
 	let cameraInput: HTMLInputElement;
 	let isSubmitting = $state(false);
 	let uploadProgress = $state({ current: 0, total: 0 });
 
 	// Handle file selection from gallery
-	function handleFileSelect(event: Event) {
+	async function handleFileSelect(event: Event) {
 		const input = event.target as HTMLInputElement;
 		if (input.files) {
-			addFiles(Array.from(input.files));
+			await addFiles(Array.from(input.files));
 			// Reset input to allow selecting the same files again
 			input.value = '';
 		}
@@ -45,14 +50,22 @@
 		return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 	}
 
-	// Add files to the selected images array
-	function addFiles(files: File[]) {
-		const newImages = files.map((file) => ({
+	// Add files to the selected images array (handles both images and PDFs)
+	async function addFiles(files: File[]) {
+		const newFiles = files.map((file) => ({
 			id: generateId(),
 			url: URL.createObjectURL(file),
-			file
+			file,
+			isPdf: isPdfFile(file)
 		}));
-		selectedImages = [...selectedImages, ...newImages];
+
+		selectedImages = [...selectedImages, ...newFiles];
+
+		// Show info message about PDFs
+		const pdfCount = newFiles.filter(f => f.isPdf).length;
+		if (pdfCount > 0) {
+			toast.info(`${pdfCount} PDF file(s) added. They will be converted to images (600 DPI) during processing.`);
+		}
 	}
 
 	// Remove a specific image
@@ -90,7 +103,7 @@
 
 				// Create record data with file
 				// Note: order starts at 1 because PocketBase treats 0 as blank for required number fields
-				const recordData = {
+				const recordData: any = {
 					batch: batch.id,
 					order: index + 1,
 					image: img.file
@@ -202,14 +215,14 @@
 <input
 	bind:this={fileInput}
 	type="file"
-	accept="image/*"
+	accept="image/*,application/pdf"
 	multiple
 	class="hidden"
 	onchange={handleFileSelect}
 />
 
 <div class="relative flex h-full w-full flex-col">
-	<!-- Loading Overlay -->
+	<!-- Upload Loading Overlay -->
 	{#if isSubmitting}
 		<div class="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
 			<Card class="w-full max-w-sm">
@@ -266,9 +279,12 @@
 								onclick={() => fileInput.click()}
 							>
 								<Upload class="mr-2 h-5 w-5" />
-								{t('images.add.upload_button')}
+								Upload Images or PDFs
 							</Button>
 						</div>
+						<p class="mt-4 text-xs text-muted-foreground">
+							Supported: JPG, PNG, PDF (auto-converted to images)
+						</p>
 					</CardContent>
 				</Card>
 			</div>
@@ -290,11 +306,25 @@
 				<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
 					{#each selectedImages as image (image.id)}
 						<div class="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
-							<img
-								src={image.url}
-								alt="Preview"
-								class="h-full w-full object-cover"
-							/>
+							{#if image.isPdf}
+								<!-- PDF file preview -->
+								<div class="flex h-full w-full items-center justify-center bg-muted">
+									<FileText class="h-16 w-16 text-muted-foreground" />
+								</div>
+								<div class="absolute bottom-2 left-2 z-10">
+									<div class="rounded-md bg-blue-500/90 backdrop-blur-sm px-2 py-1 text-xs font-medium text-white shadow-lg flex items-center gap-1">
+										<FileText class="h-3 w-3" />
+										<span>PDF</span>
+									</div>
+								</div>
+							{:else}
+								<!-- Image file preview -->
+								<img
+									src={image.url}
+									alt="Preview"
+									class="h-full w-full object-cover"
+								/>
+							{/if}
 							<!-- Always visible delete button on mobile, hover on desktop -->
 							<button
 								onclick={() => removeImage(image.id)}

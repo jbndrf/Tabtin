@@ -26,10 +26,13 @@ export const projectsStore = {
 		error = null;
 
 		try {
-			projects = await pb.collection('projects').getFullList<ProjectsResponse>({
-				sort: '-created',
+			// Use getList with high perPage instead of getFullList to avoid skipTotal parameter issue
+			// Note: Sort by -id instead of -created since created field may not exist in older schemas
+			const result = await pb.collection('projects').getList<ProjectsResponse>(1, 500, {
+				sort: '-id',
 				filter: `user = '${userId}'`
 			});
+			projects = result.items;
 		} catch (err) {
 			console.error('Failed to load projects:', err);
 			error = err instanceof Error ? err.message : 'Failed to load projects';
