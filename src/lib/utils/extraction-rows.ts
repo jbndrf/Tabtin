@@ -153,12 +153,3 @@ export function updateRowFieldValue(
 	};
 }
 
-/**
- * Check if project is in multi-row mode
- */
-export function isMultiRowMode(project: any): boolean {
-	return (
-		project?.extraction_mode === 'multi_row' ||
-		project?.settings?.extraction_mode === 'multi_row'
-	);
-}

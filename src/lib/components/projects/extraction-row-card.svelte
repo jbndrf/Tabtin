@@ -10,7 +10,6 @@
 		rowData: ExtractionResult[];
 		columns: ColumnDefinition[];
 		totalRows: number;
-		isSingleRowMode?: boolean;
 		onEdit?: (columnId: string, value: string | null) => void;
 		onDelete?: () => void;
 		onRedo?: (columnId: string) => void;
@@ -24,7 +23,6 @@
 		rowData,
 		columns,
 		totalRows,
-		isSingleRowMode = false,
 		onEdit,
 		onDelete,
 		onRedo,
@@ -66,20 +64,18 @@
 </script>
 
 <div class="border rounded-lg p-4 space-y-3 bg-card">
-	{#if !isSingleRowMode}
-		<div class="flex items-center justify-between mb-2">
-			<div class="text-sm font-medium">
-				Row {rowIndex + 1} of {totalRows}
-			</div>
-			<div class="flex gap-2">
-				{#if onDelete}
-					<Button variant="ghost" size="sm" onclick={onDelete}>
-						<Trash2 class="h-4 w-4 text-destructive" />
-					</Button>
-				{/if}
-			</div>
+	<div class="flex items-center justify-between mb-2">
+		<div class="text-sm font-medium">
+			Row {rowIndex + 1} of {totalRows}
 		</div>
-	{/if}
+		<div class="flex gap-2">
+			{#if onDelete}
+				<Button variant="ghost" size="sm" onclick={onDelete}>
+					<Trash2 class="h-4 w-4 text-destructive" />
+				</Button>
+			{/if}
+		</div>
+	</div>
 
 	<div class="space-y-2">
 		{#each columns as column}

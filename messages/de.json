@@ -227,6 +227,8 @@
 		},
 		"review": {
 			"loading": "Stapel werden geladen...",
+			"loading_images": "Bilder werden geladen...",
+			"loading_pdfs": "PDF-Seiten werden gerendert...",
 			"no_batches": "Keine Stapel zu überprüfen",
 			"back_to_project": "Zurück zum Projekt",
 			"edit_mode": "Bearbeiten",

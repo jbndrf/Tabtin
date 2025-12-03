@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Camera, Upload, X, Trash2, FileText } from 'lucide-svelte';
+	import { Camera, Upload, X, Trash2, FileText, AlertTriangle } from 'lucide-svelte';
 	import { t } from '$lib/i18n';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { pb } from '$lib/stores/auth';
 	import { toast } from '$lib/utils/toast';
 
@@ -15,12 +16,18 @@
 
 	let projectId = $page.params.id as string;
 
+	// Tab state: 'single' = Add Batch (multiple images = one batch), 'bulk' = Bulk Upload (each file = separate batch)
+	let activeTab = $state<'single' | 'bulk'>('single');
+
 	// State for managing images
 	let selectedImages = $state<{ id: string; url: string; file: File; isPdf?: boolean }[]>([]);
 	let fileInput: HTMLInputElement;
 	let cameraInput: HTMLInputElement;
 	let isSubmitting = $state(false);
 	let uploadProgress = $state({ current: 0, total: 0 });
+
+	// Drag and drop state
+	let isDragging = $state(false);
 
 	// Handle file selection from gallery
 	async function handleFileSelect(event: Event) {
@@ -83,7 +90,30 @@
 		selectedImages = [];
 	}
 
-	// Handle form submission
+	// Drag and drop handlers
+	function handleDragOver(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		isDragging = true;
+	}
+
+	function handleDragLeave(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		isDragging = false;
+	}
+
+	function handleDrop(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		isDragging = false;
+
+		if (e.dataTransfer?.files?.length) {
+			addFiles(Array.from(e.dataTransfer.files));
+		}
+	}
+
+	// Handle form submission (single batch mode)
 	async function handleSubmit() {
 		if (selectedImages.length === 0) return;
 
@@ -148,33 +178,115 @@
 			window.location.href = `/projects/${projectId}?scrollToBottom=true`;
 		} catch (error) {
 			console.error('Failed to upload images:', error);
-			// TODO: Show error toast/notification
+			toast.error('Failed to upload images');
 		} finally {
 			isSubmitting = false;
 			uploadProgress = { current: 0, total: 0 };
 		}
 	}
 
-	// Auto-trigger camera if autoCamera parameter is present
-	let hasAutoTriggered = $state(false);
+	// Handle bulk upload submission (each file = separate batch)
+	async function handleBulkSubmit() {
+		if (selectedImages.length === 0) return;
+
+		try {
+			isSubmitting = true;
+			uploadProgress = { current: 0, total: selectedImages.length };
+
+			const createdBatchIds: string[] = [];
+
+			// Create separate batch for each file
+			for (let i = 0; i < selectedImages.length; i++) {
+				const img = selectedImages[i];
+
+				// Create batch
+				const batch = await pb.collection('image_batches').create({
+					project: projectId,
+					status: 'pending'
+				});
+
+				createdBatchIds.push(batch.id);
+
+				// Upload single image to batch
+				await pb.collection('images').create({
+					batch: batch.id,
+					order: 1,
+					image: img.file
+				});
+
+				// Update progress
+				uploadProgress = { current: i + 1, total: selectedImages.length };
+			}
+
+			// Enqueue all batches at once
+			await fetch('/api/queue/enqueue', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: createdBatchIds,
+					projectId: projectId,
+					priority: 10
+				})
+			});
+
+			// Clear and navigate
+			clearAll();
+			toast.success(`Created ${createdBatchIds.length} batch${createdBatchIds.length === 1 ? '' : 'es'}`);
+			window.location.href = `/projects/${projectId}?scrollToBottom=true`;
+		} catch (error) {
+			console.error('Failed to bulk upload:', error);
+			toast.error('Failed to upload files');
+		} finally {
+			isSubmitting = false;
+			uploadProgress = { current: 0, total: 0 };
+		}
+	}
+
+	// Helper to convert base64 back to File
+	function base64ToFile(base64: string, filename: string, mimeType: string): File {
+		const arr = base64.split(',');
+		const bstr = atob(arr[1]);
+		let n = bstr.length;
+		const u8arr = new Uint8Array(n);
+		while (n--) {
+			u8arr[n] = bstr.charCodeAt(n);
+		}
+		return new File([u8arr], filename, { type: mimeType });
+	}
+
+	// Load pending images from sessionStorage (from projects page camera capture)
+	async function loadPendingImages(filesData: { name: string; type: string; data: string }[]) {
+		const files = filesData.map((f) => base64ToFile(f.data, f.name, f.type));
+		await addFiles(files);
+	}
+
+	// Load images from sessionStorage if fromCamera parameter is present
+	let hasLoadedFromStorage = $state(false);
 
 	$effect(() => {
-		if (hasAutoTriggered) return;
+		if (hasLoadedFromStorage) return;
 
 		const url = new URL(window.location.href);
-		const autoCamera = url.searchParams.get('autoCamera');
+		const fromCamera = url.searchParams.get('fromCamera');
 
-		if (autoCamera === 'true' && cameraInput) {
-			hasAutoTriggered = true;
+		if (fromCamera === 'true') {
+			hasLoadedFromStorage = true;
 
-			// Clean up URL parameter immediately
-			url.searchParams.delete('autoCamera');
+			// Clean up URL parameter
+			url.searchParams.delete('fromCamera');
 			window.history.replaceState({}, '', url.toString());
 
-			// Trigger camera after a short delay to ensure input is mounted
-			setTimeout(() => {
-				cameraInput.click();
-			}, 150);
+			// Load images from sessionStorage
+			const pendingData = sessionStorage.getItem('pendingImages');
+			if (pendingData) {
+				sessionStorage.removeItem('pendingImages');
+				try {
+					const filesData = JSON.parse(pendingData);
+					loadPendingImages(filesData);
+				} catch (e) {
+					console.error('Failed to parse pending images:', e);
+				}
+			}
 		}
 	});
 
@@ -251,15 +363,47 @@
 		<p class="mt-1 text-sm text-muted-foreground">{t('images.add.subtitle')}</p>
 	</div>
 
+	<!-- Tabs -->
+	<div class="border-b bg-background px-4">
+		<Tabs.Root bind:value={activeTab}>
+			<Tabs.List class="w-full justify-start">
+				<Tabs.Trigger value="single">Add Batch</Tabs.Trigger>
+				<Tabs.Trigger value="bulk">Bulk Upload</Tabs.Trigger>
+			</Tabs.List>
+		</Tabs.Root>
+	</div>
+
 	<!-- Main Content -->
 	<div class="flex-1 overflow-y-auto p-4">
+		<!-- Bulk Upload Warning -->
+		{#if activeTab === 'bulk'}
+			<div class="mb-4 flex items-start gap-3 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+				<AlertTriangle class="h-5 w-5 shrink-0 text-yellow-600 dark:text-yellow-400" />
+				<div>
+					<p class="font-medium text-yellow-700 dark:text-yellow-300">One file = one batch</p>
+					<p class="mt-1 text-sm text-yellow-600 dark:text-yellow-400">
+						Each file will become its own batch. The AI will process each file independently and won't know if multiple images belong to the same document.
+					</p>
+				</div>
+			</div>
+		{/if}
+
 		{#if selectedImages.length === 0}
-			<!-- Empty State -->
+			<!-- Empty State with Drag & Drop -->
 			<div class="flex h-full min-h-[400px] items-center justify-center">
-				<Card class="w-full max-w-md border-dashed">
-					<CardContent class="flex flex-col items-center justify-center py-12 text-center">
+				<div
+					class="w-full max-w-md rounded-lg border-2 border-dashed p-8 transition-colors {isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}"
+					ondragover={handleDragOver}
+					ondragleave={handleDragLeave}
+					ondrop={handleDrop}
+					role="region"
+					aria-label="Drop zone"
+				>
+					<div class="flex flex-col items-center justify-center text-center">
 						<Camera class="mb-4 h-16 w-16 text-muted-foreground" />
-						<h3 class="mb-2 text-lg font-medium">{t('images.add.empty_state')}</h3>
+						<h3 class="mb-2 text-lg font-medium">
+							{isDragging ? 'Drop files here' : t('images.add.empty_state')}
+						</h3>
 						<p class="mb-6 text-sm text-muted-foreground">
 							{t('images.add.empty_description')}
 						</p>
@@ -285,22 +429,40 @@
 						<p class="mt-4 text-xs text-muted-foreground">
 							Supported: JPG, PNG, PDF (auto-converted to images)
 						</p>
-					</CardContent>
-				</Card>
+						<p class="mt-2 text-xs text-muted-foreground">
+							Or drag and drop files here
+						</p>
+					</div>
+				</div>
 			</div>
 		{:else}
-			<!-- Image Grid -->
-			<div class="space-y-4">
+			<!-- Image Grid with Drag & Drop -->
+			<div
+				class="space-y-4"
+				ondragover={handleDragOver}
+				ondragleave={handleDragLeave}
+				ondrop={handleDrop}
+			>
 				<!-- Action Bar -->
 				<div class="flex items-center justify-between">
 					<p class="text-sm font-medium text-muted-foreground">
 						{t('images.add.selected_count', { count: selectedImages.length })}
+						{#if activeTab === 'bulk'}
+							<span class="ml-1">({selectedImages.length} batch{selectedImages.length === 1 ? '' : 'es'} will be created)</span>
+						{/if}
 					</p>
 					<Button variant="ghost" size="sm" onclick={clearAll}>
 						<Trash2 class="mr-2 h-4 w-4" />
 						{t('images.add.clear_all')}
 					</Button>
 				</div>
+
+				<!-- Drag indicator -->
+				{#if isDragging}
+					<div class="rounded-lg border-2 border-dashed border-primary bg-primary/5 p-8 text-center">
+						<p class="text-sm font-medium text-primary">Drop files to add more</p>
+					</div>
+				{/if}
 
 				<!-- Image Grid -->
 				<div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -372,13 +534,23 @@
 				>
 					{t('images.add.cancel_button')}
 				</Button>
-				<Button
-					class="flex-1"
-					disabled={isSubmitting}
-					onclick={handleSubmit}
-				>
-					{isSubmitting ? 'Uploading...' : t('images.add.submit_button')}
-				</Button>
+				{#if activeTab === 'single'}
+					<Button
+						class="flex-1"
+						disabled={isSubmitting}
+						onclick={handleSubmit}
+					>
+						{isSubmitting ? 'Uploading...' : t('images.add.submit_button')}
+					</Button>
+				{:else}
+					<Button
+						class="flex-1"
+						disabled={isSubmitting}
+						onclick={handleBulkSubmit}
+					>
+						{isSubmitting ? 'Uploading...' : `Create ${selectedImages.length} Batch${selectedImages.length === 1 ? '' : 'es'}`}
+					</Button>
+				{/if}
 			</div>
 		</div>
 	{/if}

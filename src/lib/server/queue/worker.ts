@@ -275,21 +275,9 @@ export class QueueWorker {
 			console.log('Final parsedData:', JSON.stringify(parsedData, null, 2));
 			console.log('=== End Debugging ===');
 
-			// NEW: Check project extraction mode
-			const extractionMode = project.extraction_mode || settings.extraction_mode || 'single_row';
-			console.log(`Extraction mode: ${extractionMode}`);
-
-			let extractedRows: any[][];
-
-			if (extractionMode === 'multi_row') {
-				// Parse multi-row response
-				extractedRows = this.parseMultiRowResponse(parsedData, settings.columns);
-				console.log(`Parsed ${extractedRows.length} rows from LLM response`);
-			} else {
-				// Single-row mode: wrap all extractions as one row
-				extractedRows = [parsedData];
-				console.log('Single-row mode: treating all extractions as one row');
-			}
+			// Always use multi-row parsing (single-row is just multi-row with one item)
+			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns);
+			console.log(`Parsed ${extractedRows.length} rows from LLM response`);
 
 			// Create extraction_rows records for each detected row
 			// NOTE: PocketBase treats 0 as blank for required numeric fields, so we use 1-based indexing

@@ -2,13 +2,49 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Table from '$lib/components/ui/table';
-	import { Loader2, X, Plus } from 'lucide-svelte';
+	import { Loader2, X, Plus, Camera } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, projectBatches, projectStats, isProjectLoading, type BatchWithData } from '$lib/stores/project-data';
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/utils/toast';
+
+	// Camera input reference
+	let cameraInput: HTMLInputElement;
+
+	// Helper to convert file to base64
+	function fileToBase64(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = reject;
+			reader.readAsDataURL(file);
+		});
+	}
+
+	// Handle camera capture on projects page
+	async function handleCameraCapture(e: Event) {
+		const input = e.target as HTMLInputElement;
+		if (input.files?.length) {
+			try {
+				// Convert files to base64 for sessionStorage
+				const filesData = await Promise.all(
+					Array.from(input.files).map(async (file) => ({
+						name: file.name,
+						type: file.type,
+						data: await fileToBase64(file)
+					}))
+				);
+				sessionStorage.setItem('pendingImages', JSON.stringify(filesData));
+				goto(`/projects/${data.projectId}/images/add?fromCamera=true`);
+			} catch (error) {
+				console.error('Failed to process camera capture:', error);
+				toast.error('Failed to process captured image');
+			}
+			// Reset input
+			input.value = '';
+		}
+	}
 
 	interface ColumnDefinition {
 		id: string;
@@ -51,11 +87,10 @@
 		return extraction?.value ?? '';
 	}
 
-
-	onMount(async () => {
+	async function loadProjectData(projectId: string) {
 		try {
-			// Load project data from store (will use cache if available)
-			await projectData.loadProject(data.projectId, $currentUser?.id || '');
+			// Load project data from store (force reload when projectId changes)
+			await projectData.loadProject(projectId, $currentUser?.id || '', true);
 
 			if ($currentProject?.settings?.columns) {
 				columns = $currentProject.settings.columns;
@@ -63,7 +98,7 @@
 
 			// Load pending batches and enqueue them for automatic processing
 			const pendingBatches = await pb.collection('image_batches').getFullList({
-				filter: `project = "${data.projectId}" && status = "pending"`,
+				filter: `project = "${projectId}" && status = "pending"`,
 				sort: '+id'
 			});
 
@@ -73,7 +108,7 @@
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
 						batchIds: pendingBatches.map(b => b.id),
-						projectId: data.projectId,
+						projectId: projectId,
 						priority: 10
 					})
 				});
@@ -87,7 +122,15 @@
 			}, 100);
 		} catch (error) {
 			console.error('Failed to load project:', error);
-			goto('/dashboard');
+			toast.error('Failed to load project data');
+		}
+	}
+
+	// React to projectId changes (handles both initial load and navigation between projects)
+	$effect(() => {
+		const projectId = data.projectId;
+		if (projectId && $currentUser?.id) {
+			loadProjectData(projectId);
 		}
 	});
 
@@ -258,15 +301,26 @@
 			{/if}
 		</div>
 
+		<!-- Hidden Camera Input -->
+		<input
+			bind:this={cameraInput}
+			type="file"
+			accept="image/*"
+			capture="environment"
+			multiple
+			class="hidden"
+			onchange={handleCameraCapture}
+		/>
+
 		<!-- Add Batch Button - Fixed at Bottom (Above Mobile Nav) -->
 		<div class="fixed bottom-16 left-0 right-0 bg-background border-t px-4 py-3 shrink-0 md:relative md:bottom-auto md:left-auto md:right-auto">
 			<Button
-				onclick={() => goto(`/projects/${data.projectId}/images/add?autoCamera=true`)}
+				onclick={() => cameraInput.click()}
 				size="sm"
 				variant="outline"
 				class="gap-2"
 			>
-				<Plus class="h-4 w-4" />
+				<Camera class="h-4 w-4" />
 				Add Batch
 			</Button>
 		</div>

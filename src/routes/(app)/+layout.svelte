@@ -5,21 +5,15 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { Button } from '$lib/components/ui/button';
 	import { page } from '$app/stores';
-	import { pb, currentUser } from '$lib/stores/auth';
-	import { goto } from '$app/navigation';
+	import { currentUser } from '$lib/stores/auth';
 	import { onMount } from 'svelte';
 	import { pageActions } from '$lib/stores/page-actions';
 	import { projectsStore } from '$lib/stores/projects.svelte';
 
 	let { children }: { children: any } = $props();
 
-	// Redirect if not authenticated
+	// Load projects when authenticated (auth is already verified server-side)
 	onMount(() => {
-		if (!pb.authStore.isValid) {
-			goto('/login');
-			return;
-		}
-
 		if ($currentUser?.id) {
 			projectsStore.loadProjects($currentUser.id);
 		}

@@ -1,6 +1,6 @@
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import PocketBase from 'pocketbase';
-import type { Handle } from '@sveltejs/kit';
+import { redirect, type Handle } from '@sveltejs/kit';
 import { startWorker } from '$lib/server/queue';
 
 // Start the background worker on server startup
@@ -14,6 +14,25 @@ if (!workerStarted) {
 		.catch((error) => {
 			console.error('[Queue] Failed to start background worker:', error);
 		});
+}
+
+// Routes that don't require authentication
+const publicRoutes = ['/login', '/register', '/logout'];
+
+function isPublicRoute(pathname: string): boolean {
+	// Allow public routes
+	if (publicRoutes.some((route) => pathname === route || pathname.startsWith(route + '/'))) {
+		return true;
+	}
+	// Allow API routes (they handle their own auth)
+	if (pathname.startsWith('/api/')) {
+		return true;
+	}
+	// Allow static assets
+	if (pathname.startsWith('/_app/') || pathname.startsWith('/favicon')) {
+		return true;
+	}
+	return false;
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -32,12 +51,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.locals.pb.authStore.clear();
 	}
 
-	// Debug logging
-	console.log('[Auth Debug] Path:', event.url.pathname);
-	console.log('[Auth Debug] Cookie:', event.request.headers.get('cookie'));
-	console.log('[Auth Debug] Auth valid:', event.locals.pb.authStore.isValid);
-	console.log('[Auth Debug] Auth token:', event.locals.pb.authStore.token);
-	console.log('[Auth Debug] Auth model:', event.locals.pb.authStore.model);
+	// Redirect unauthenticated users to login (except for public routes)
+	if (!event.locals.pb.authStore.isValid && !isPublicRoute(event.url.pathname)) {
+		throw redirect(303, '/login');
+	}
 
 	const response = await resolve(event);
 

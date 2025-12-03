@@ -227,6 +227,8 @@
 		},
 		"review": {
 			"loading": "Loading batches...",
+			"loading_images": "Loading images...",
+			"loading_pdfs": "Rendering PDF pages...",
 			"no_batches": "No batches to review",
 			"back_to_project": "Back to Project",
 			"edit_mode": "Edit",

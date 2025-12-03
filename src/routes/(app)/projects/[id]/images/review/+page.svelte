@@ -6,7 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { t } from '$lib/i18n';
 	import { toast } from '$lib/utils/toast';
-	import { Check, X, ZoomIn, ZoomOut, Maximize2, MoreVertical, Search, MapPin, Edit, Settings, Trash2, Crop, RotateCcw } from 'lucide-svelte';
+	import { Check, X, ZoomIn, ZoomOut, Maximize2, MoreVertical, Search, MapPin, Edit, Settings, Trash2, Crop, RotateCcw, FileText } from 'lucide-svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
@@ -32,6 +32,15 @@
 		allowed_values?: string[];
 	}
 
+	// Virtual image type that can be either a regular image or a PDF page
+	interface VirtualImage {
+		id: string;           // Original image ID (or image_id + _page_N for PDFs)
+		originalImage: ImagesResponse;
+		isPdf: boolean;
+		pageNumber?: number;  // 1-based page number for PDFs
+		pdfCanvas?: HTMLCanvasElement;  // Pre-rendered PDF page
+	}
+
 	let { data }: { data: PageData } = $props();
 
 	let project = $state<ProjectsResponse | null>(null);
@@ -47,6 +56,13 @@
 	let canvasElements = $state<HTMLCanvasElement[]>([]);
 	let imageElements = $state<HTMLImageElement[]>([]);
 	let cardElement = $state<HTMLDivElement>();
+
+	// Expanded images list (includes individual PDF pages)
+	let expandedImages = $state<VirtualImage[]>([]);
+	let loadingPdfs = $state(false);
+
+	// pdf.js library reference
+	let pdfjsLib: any = null;
 
 	// Swipe state for card
 	let isDragging = $state(false);
@@ -105,6 +121,108 @@
 	let showBboxLabels = $state(true);
 	let showBboxValues = $state(true);
 	let coordinateFormat = $state<'normalized_1000' | 'normalized_1000_yxyx'>('normalized_1000');
+
+	// PDF detection helper
+	function isPdfFile(filename: string): boolean {
+		return filename.toLowerCase().endsWith('.pdf');
+	}
+
+	// Initialize pdf.js library
+	async function initPdfJs() {
+		if (pdfjsLib) return pdfjsLib;
+
+		pdfjsLib = await import('pdfjs-dist');
+		// Set worker source
+		pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+			'pdfjs-dist/build/pdf.worker.min.mjs',
+			import.meta.url
+		).toString();
+
+		return pdfjsLib;
+	}
+
+	// Render all pages of a PDF to canvases
+	async function renderPdfPages(image: ImagesResponse): Promise<HTMLCanvasElement[]> {
+		const url = pb.files.getURL(image, image.image);
+		const pdfjs = await initPdfJs();
+
+		// Fetch PDF data
+		const response = await fetch(url);
+		const arrayBuffer = await response.arrayBuffer();
+
+		// Load PDF document
+		const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+		const totalPages = pdf.numPages;
+		const canvases: HTMLCanvasElement[] = [];
+
+		// Render each page
+		for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+			const page = await pdf.getPage(pageNum);
+
+			// Use scale factor similar to the client-side converter for good quality
+			const scale = 4.0;
+			const viewport = page.getViewport({ scale });
+
+			// Create canvas for this page
+			const canvas = document.createElement('canvas');
+			const context = canvas.getContext('2d');
+			if (!context) {
+				throw new Error('Failed to get canvas context');
+			}
+
+			canvas.width = viewport.width;
+			canvas.height = viewport.height;
+
+			// Render page to canvas
+			await page.render({
+				canvasContext: context,
+				viewport
+			}).promise;
+
+			canvases.push(canvas);
+		}
+
+		return canvases;
+	}
+
+	// Expand batch images to include individual PDF pages
+	async function expandBatchImages(images: ImagesResponse[]): Promise<VirtualImage[]> {
+		const expanded: VirtualImage[] = [];
+
+		for (const image of images) {
+			if (isPdfFile(image.image)) {
+				try {
+					const pages = await renderPdfPages(image);
+					pages.forEach((canvas, pageIdx) => {
+						expanded.push({
+							id: `${image.id}_page_${pageIdx + 1}`,
+							originalImage: image,
+							isPdf: true,
+							pageNumber: pageIdx + 1,
+							pdfCanvas: canvas
+						});
+					});
+				} catch (error) {
+					console.error('Failed to render PDF:', image.image, error);
+					// Still add a placeholder so the image count is preserved
+					expanded.push({
+						id: image.id,
+						originalImage: image,
+						isPdf: true,
+						pageNumber: 1
+					});
+				}
+			} else {
+				expanded.push({
+					id: image.id,
+					originalImage: image,
+					isPdf: false
+				});
+			}
+		}
+
+		return expanded;
+	}
 
 	onMount(() => {
 		// Handle keyboard shortcuts
@@ -179,16 +297,27 @@
 	let canvasKey = $state(0);
 
 	$effect(() => {
-		const batch = getCurrentBatch();
 		console.log('Render effect check:', {
 			canvasElementsLength: canvasElements.length,
 			imageElementsLength: imageElements.length,
-			batchesLength: batches.length,
-			batchImages: batch?.images?.length,
-			imageUrls: batch?.images?.map(img => getImageUrl(img))
+			expandedImagesLength: expandedImages.length
 		});
-		if (canvasElements.length > 0 && imageElements.length > 0 && batches.length > 0) {
+		// For PDFs, we don't need imageElements (they render from pdfCanvas)
+		// For regular images, we need imageElements to be loaded
+		if (canvasElements.length > 0 && expandedImages.length > 0) {
 			renderAllCanvases();
+		}
+	});
+
+	// Initialize zoom/pan arrays when expandedImages changes
+	$effect(() => {
+		if (expandedImages.length > 0) {
+			// Only resize arrays if needed (keep existing values)
+			if (zoomLevels.length !== expandedImages.length) {
+				zoomLevels = Array(expandedImages.length).fill(1);
+				panX = Array(expandedImages.length).fill(0);
+				panY = Array(expandedImages.length).fill(0);
+			}
 		}
 	});
 
@@ -212,16 +341,13 @@
 			canvasElements = [];
 			imageElements = [];
 
-			// Reset zoom/pan state for new batch
-			if (batch?.images) {
-				zoomLevels = Array(batch.images.length).fill(1);
-				panX = Array(batch.images.length).fill(0);
-				panY = Array(batch.images.length).fill(0);
-			} else {
-				zoomLevels = [];
-				panX = [];
-				panY = [];
-			}
+			// Clear expandedImages - will be repopulated when batch images load
+			expandedImages = [];
+
+			// Reset zoom/pan state (will be properly sized by effect when expandedImages loads)
+			zoomLevels = [];
+			panX = [];
+			panY = [];
 
 			// Reset swipe/gesture state
 			isDragging = false;
@@ -275,6 +401,15 @@
 			if (!batches[batchIndex]) {
 				batches[batchIndex] = { ...batch, images };
 			}
+
+			// Expand images to handle PDFs (renders PDF pages to canvases)
+			loadingPdfs = true;
+			try {
+				expandedImages = await expandBatchImages(images);
+				console.log('Expanded images:', expandedImages.length, 'from', images.length, 'original files');
+			} finally {
+				loadingPdfs = false;
+			}
 		} catch (error: any) {
 			if (!error?.isAbort) {
 				console.error('Failed to load batch images:', error);
@@ -288,9 +423,8 @@
 		return batches[currentBatchIndex];
 	}
 
-	function getCurrentImage() {
-		const batch = getCurrentBatch();
-		return batch?.images?.[currentImageIndex];
+	function getCurrentImage(): VirtualImage | undefined {
+		return expandedImages[currentImageIndex];
 	}
 
 	function getImageUrl(image: ImagesResponse) {
@@ -354,28 +488,65 @@
 		return result;
 	}
 
+	// Helper to find the actual column ID for an extraction (handles LLM using different ID formats)
+	function getActualColumnId(extraction: ExtractionResult): string | null {
+		// First try direct match
+		const directMatch = columns.find(c => c.id === extraction.column_id);
+		if (directMatch) return directMatch.id;
+		// Fall back to matching by column_name
+		const nameMatch = columns.find(c => c.name === extraction.column_name);
+		if (nameMatch) return nameMatch.id;
+		return null;
+	}
+
 	function getColumnValue(columnId: string): { value: string | null; confidence: number; redone?: boolean } | null {
 		const allExtractions = getAllExtractions();
-		const extraction = allExtractions.find(e => e.column_id === columnId);
+		const column = columns.find(c => c.id === columnId);
+		// Match by column_id first, then fall back to column_name if LLM used different ID format
+		const extraction = allExtractions.find(e =>
+			e.column_id === columnId ||
+			(column && e.column_name === column.name)
+		);
 		return extraction ? { value: extraction.value, confidence: extraction.confidence, redone: extraction.redone } : null;
 	}
 
 	function renderAllCanvases() {
-		const batch = getCurrentBatch();
-		if (!batch?.images) return;
+		if (expandedImages.length === 0) return;
 
-		batch.images.forEach((image, imageIdx) => {
+		expandedImages.forEach((_, imageIdx) => {
 			renderCanvas(imageIdx);
 		});
 	}
 
 	function renderCanvas(imageIdx: number) {
 		const canvas = canvasElements[imageIdx];
-		const img = imageElements[imageIdx];
+		const vImage = expandedImages[imageIdx];
 
-		if (!canvas || !img || !img.complete || img.naturalWidth === 0) {
-			console.log('Canvas render skipped:', { imageIdx, hasCanvas: !!canvas, hasImg: !!img, imgComplete: img?.complete, imgWidth: img?.naturalWidth });
+		if (!canvas || !vImage) {
+			console.log('Canvas render skipped (no canvas or vImage):', { imageIdx, hasCanvas: !!canvas, hasVImage: !!vImage });
 			return;
+		}
+
+		// Determine source element and dimensions
+		let sourceElement: HTMLImageElement | HTMLCanvasElement;
+		let sourceWidth: number;
+		let sourceHeight: number;
+
+		if (vImage.isPdf && vImage.pdfCanvas) {
+			// Use pre-rendered PDF canvas
+			sourceElement = vImage.pdfCanvas;
+			sourceWidth = vImage.pdfCanvas.width;
+			sourceHeight = vImage.pdfCanvas.height;
+		} else {
+			// Use regular image element
+			const img = imageElements[imageIdx];
+			if (!img || !img.complete || img.naturalWidth === 0) {
+				console.log('Canvas render skipped (img not ready):', { imageIdx, hasImg: !!img, imgComplete: img?.complete, imgWidth: img?.naturalWidth });
+				return;
+			}
+			sourceElement = img;
+			sourceWidth = img.naturalWidth;
+			sourceHeight = img.naturalHeight;
 		}
 
 		const ctx = canvas.getContext('2d', { alpha: false });
@@ -416,7 +587,7 @@
 		ctx.clearRect(0, 0, containerWidth, containerHeight);
 
 		// Calculate image dimensions to fit container while maintaining aspect ratio
-		const imgAspect = img.naturalWidth / img.naturalHeight;
+		const imgAspect = sourceWidth / sourceHeight;
 		const containerAspect = containerWidth / containerHeight;
 
 		let baseDrawWidth, baseDrawHeight, baseOffsetX, baseOffsetY;
@@ -445,16 +616,21 @@
 		const offsetX = baseOffsetX - (drawWidth - baseDrawWidth) / 2 + currentPanX;
 		const offsetY = baseOffsetY - (drawHeight - baseDrawHeight) / 2 + currentPanY;
 
-		// Draw image
-		ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+		// Draw image (works with both HTMLImageElement and HTMLCanvasElement)
+		ctx.drawImage(sourceElement, offsetX, offsetY, drawWidth, drawHeight);
 
 		// Draw bounding boxes for this specific image (excluding redo columns)
-		const extractions = getAllExtractions().filter(e => e.image_index === imageIdx && !redoColumns.has(e.column_id));
+		// Use getActualColumnId to handle LLM using different column_id formats
+		const extractions = getAllExtractions().filter(e => {
+			if (e.image_index !== imageIdx) return false;
+			const actualColId = getActualColumnId(e);
+			return actualColId ? !redoColumns.has(actualColId) : true;
+		});
 		extractions.forEach((extraction) => {
 			if (extraction.bbox_2d[0] === 0 && extraction.bbox_2d[1] === 0) return;
 
 			// Convert coordinates based on selected format (result is always 0-1 normalized)
-			const normalizedBbox = convertBboxCoordinates(extraction.bbox_2d, img.naturalWidth, img.naturalHeight);
+			const normalizedBbox = convertBboxCoordinates(extraction.bbox_2d, sourceWidth, sourceHeight);
 
 			// Apply to actual rendered dimensions
 			const x1 = normalizedBbox[0] * drawWidth + offsetX;
@@ -503,12 +679,11 @@
 		});
 
 		// Draw custom bounding boxes for redo columns on this image
-		const batch = getCurrentBatch();
-		const currentImage = batch?.images?.[imageIdx];
+		const currentVImage = expandedImages[imageIdx];
 
 		Object.entries(customBoundingBoxes).forEach(([columnId, box]) => {
 			// Only draw if this box is for the current image (compare by ID)
-			if (!currentImage || box.imageId !== currentImage.id) return;
+			if (!currentVImage || box.imageId !== currentVImage.id) return;
 
 			const column = columns.find(c => c.id === columnId);
 			if (!column) return;
@@ -827,14 +1002,12 @@
 	}
 
 	function handlePreviousImage() {
-		const batch = getCurrentBatch();
-		if (!batch?.images || currentImageIndex === 0) return;
+		if (expandedImages.length === 0 || currentImageIndex === 0) return;
 		currentImageIndex--;
 	}
 
 	function handleNextImage() {
-		const batch = getCurrentBatch();
-		if (!batch?.images || currentImageIndex >= batch.images.length - 1) return;
+		if (expandedImages.length === 0 || currentImageIndex >= expandedImages.length - 1) return;
 		currentImageIndex++;
 	}
 
@@ -1414,8 +1587,22 @@
 
 		// Calculate the bounding box in normalized coordinates
 		const canvas = canvasElements[currentImageIndex];
-		const img = imageElements[currentImageIndex];
-		if (!canvas || !img || !cropModeColumnId) return;
+		const vImage = expandedImages[currentImageIndex];
+		if (!canvas || !vImage || !cropModeColumnId) return;
+
+		// Get source dimensions (from PDF canvas or image element)
+		let sourceWidth: number;
+		let sourceHeight: number;
+
+		if (vImage.isPdf && vImage.pdfCanvas) {
+			sourceWidth = vImage.pdfCanvas.width;
+			sourceHeight = vImage.pdfCanvas.height;
+		} else {
+			const img = imageElements[currentImageIndex];
+			if (!img || !img.complete) return;
+			sourceWidth = img.naturalWidth;
+			sourceHeight = img.naturalHeight;
+		}
 
 		const rect = canvas.getBoundingClientRect();
 
@@ -1438,7 +1625,7 @@
 		const containerHeight = rect.height;
 
 		// Calculate image dimensions as rendered in the canvas
-		const imgAspect = img.naturalWidth / img.naturalHeight;
+		const imgAspect = sourceWidth / sourceHeight;
 		const containerAspect = containerWidth / containerHeight;
 
 		let baseDrawWidth, baseDrawHeight, baseOffsetX, baseOffsetY;
@@ -1480,18 +1667,9 @@
 			Math.max(0, Math.min(1, normalizedY2))
 		];
 
-		// Get the actual image ID from the current image
-		const batch = getCurrentBatch();
-		const currentImage = batch?.images?.[currentImageIndex];
-		if (!currentImage) {
-			toast.error('Could not get current image ID');
-			exitCropMode();
-			return;
-		}
-
-		// Store the bounding box (only one per column)
+		// Store the bounding box using the virtual image ID
 		customBoundingBoxes[cropModeColumnId] = {
-			imageId: currentImage.id,
+			imageId: vImage.id,
 			bbox: clampedBbox
 		};
 
@@ -1577,16 +1755,31 @@
 			let orderCounter = (batch.images?.length || 0) + 1;
 
 			for (const [columnId, box] of Object.entries(customBoundingBoxes)) {
-				// Find the source image by ID
-				const imageIndex = batch.images?.findIndex(img => img.id === box.imageId);
-				if (imageIndex === undefined || imageIndex === -1) {
-					console.error('Could not find image with ID:', box.imageId);
+				// Find the virtual image by ID
+				const vImageIndex = expandedImages.findIndex(vi => vi.id === box.imageId);
+				if (vImageIndex === -1) {
+					console.error('Could not find virtual image with ID:', box.imageId);
 					continue;
 				}
 
-				const img = imageElements[imageIndex];
-				const sourceImage = batch.images?.[imageIndex];
-				if (!img || !img.complete || !sourceImage) continue;
+				const vImage = expandedImages[vImageIndex];
+
+				// Get source dimensions and drawable element
+				let sourceWidth: number;
+				let sourceHeight: number;
+				let sourceElement: HTMLImageElement | HTMLCanvasElement;
+
+				if (vImage.isPdf && vImage.pdfCanvas) {
+					sourceWidth = vImage.pdfCanvas.width;
+					sourceHeight = vImage.pdfCanvas.height;
+					sourceElement = vImage.pdfCanvas;
+				} else {
+					const img = imageElements[vImageIndex];
+					if (!img || !img.complete) continue;
+					sourceWidth = img.naturalWidth;
+					sourceHeight = img.naturalHeight;
+					sourceElement = img;
+				}
 
 				// Create a canvas for cropping
 				const canvas = document.createElement('canvas');
@@ -1594,10 +1787,10 @@
 				if (!ctx) continue;
 
 				// Calculate crop dimensions from normalized bbox (0-1 range)
-				const cropX = box.bbox[0] * img.naturalWidth;
-				const cropY = box.bbox[1] * img.naturalHeight;
-				const cropW = (box.bbox[2] - box.bbox[0]) * img.naturalWidth;
-				const cropH = (box.bbox[3] - box.bbox[1]) * img.naturalHeight;
+				const cropX = box.bbox[0] * sourceWidth;
+				const cropY = box.bbox[1] * sourceHeight;
+				const cropW = (box.bbox[2] - box.bbox[0]) * sourceWidth;
+				const cropH = (box.bbox[3] - box.bbox[1]) * sourceHeight;
 
 				// Set canvas size to crop dimensions
 				canvas.width = cropW;
@@ -1605,7 +1798,7 @@
 
 				// Draw the cropped region
 				ctx.drawImage(
-					img,
+					sourceElement,
 					cropX, cropY, cropW, cropH,  // source
 					0, 0, cropW, cropH           // destination
 				);
@@ -1620,8 +1813,8 @@
 				formData.append('image', blob, `crop_${columnId}_${Date.now()}.jpg`);
 				formData.append('batch', batch.id);
 				formData.append('order', String(orderCounter++));
-				// Parent can be original or another cropped image
-				formData.append('parent_image', sourceImage.id);
+				// Parent is the original image record
+				formData.append('parent_image', vImage.originalImage.id);
 				formData.append('column_id', columnId);
 				formData.append('bbox_used', JSON.stringify(box.bbox));
 				formData.append('is_cropped', 'true');
@@ -1629,12 +1822,13 @@
 				const croppedImageRecord = await pb.collection('images').create(formData);
 
 				croppedImageIds[columnId] = croppedImageRecord.id;
-				sourceImageIds[columnId] = sourceImage.id; // Store the source image ID
+				sourceImageIds[columnId] = vImage.originalImage.id; // Store the source image ID
 
 				console.log('Uploaded cropped image for column:', columnId, {
 					imageId: croppedImageRecord.id,
-					parentImageId: sourceImage.id,
-					isParentCropped: sourceImage.is_cropped,
+					parentImageId: vImage.originalImage.id,
+					isParentCropped: vImage.originalImage.is_cropped,
+					isPdf: vImage.isPdf,
 					cropX, cropY, cropW, cropH
 				});
 			}
@@ -1802,6 +1996,21 @@
 						ontouchmove={handleImageSwipeMove}
 						ontouchend={handleImageSwipeEnd}
 					>
+						<!-- Loading overlay for images/PDFs -->
+						{#if loadingBatchImages || loadingPdfs}
+							<div class="absolute inset-0 z-50 flex items-center justify-center bg-muted/80 backdrop-blur-sm">
+								<div class="text-center">
+									<div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+									<p class="text-sm font-medium text-muted-foreground">
+										{#if loadingPdfs}
+											{t('images.review.loading_pdfs')}
+										{:else}
+											{t('images.review.loading_images')}
+										{/if}
+									</p>
+								</div>
+							</div>
+						{/if}
 						{#key canvasKey}
 							<div
 								class="flex h-full w-full"
@@ -1810,7 +2019,7 @@
 									transition: {isImageSwiping ? 'none' : 'transform 0.3s ease-out'};
 								"
 							>
-								{#each getCurrentBatch()?.images || [] as image, idx}
+								{#each expandedImages as vImage, idx}
 									<div class="relative h-full w-full flex-shrink-0">
 										<div class="relative h-full w-full">
 											<canvas
@@ -1820,11 +2029,18 @@
 										</div>
 
 										<!-- Image type indicator -->
-										{#if image.is_cropped}
+										{#if vImage.isPdf}
+											<div class="absolute top-4 left-4 z-20">
+												<div class="rounded-lg bg-amber-500/90 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-white shadow-lg flex items-center gap-1.5">
+													<FileText class="h-3.5 w-3.5" />
+													<span>PDF Page {vImage.pageNumber}</span>
+												</div>
+											</div>
+										{:else if vImage.originalImage.is_cropped}
 											<div class="absolute top-4 left-4 z-20">
 												<div class="rounded-lg bg-purple-500/90 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-white shadow-lg flex items-center gap-1.5">
 													<Crop class="h-3.5 w-3.5" />
-													<span>ROI: {columns.find(c => c.id === image.column_id)?.name || 'Unknown'}</span>
+													<span>ROI: {columns.find(c => c.id === vImage.originalImage.column_id)?.name || 'Unknown'}</span>
 												</div>
 											</div>
 										{:else}
@@ -1835,24 +2051,27 @@
 											</div>
 										{/if}
 
-										<img
-											bind:this={imageElements[idx]}
-											src={getImageUrl(image)}
-											alt="Image {idx + 1}"
-											class="hidden"
-											crossorigin="anonymous"
-											onload={handleImageLoad}
-											onerror={handleImageError}
-										/>
+										<!-- Hidden image element for non-PDF images -->
+										{#if !vImage.isPdf}
+											<img
+												bind:this={imageElements[idx]}
+												src={getImageUrl(vImage.originalImage)}
+												alt="Image {idx + 1}"
+												class="hidden"
+												crossorigin="anonymous"
+												onload={handleImageLoad}
+												onerror={handleImageError}
+											/>
+										{/if}
 									</div>
 								{/each}
 							</div>
 						{/key}
 
 						<!-- Image dots -->
-						{#if getCurrentBatch()?.images && getCurrentBatch()?.images.length > 1}
+						{#if expandedImages.length > 1}
 							<div class="absolute left-0 right-0 top-3 flex justify-center gap-1.5 z-10">
-								{#each getCurrentBatch()?.images || [] as _, idx}
+								{#each expandedImages as _, idx}
 									<button
 										class="h-1.5 rounded-full transition-all {idx === currentImageIndex
 											? 'w-8 bg-white shadow-lg'
@@ -1908,10 +2127,10 @@
 						{/if}
 
 						<!-- Image counter hint -->
-						{#if getCurrentBatch()?.images && getCurrentBatch()?.images.length > 1 && !isDragging && !isCropMode}
+						{#if expandedImages.length > 1 && !isDragging && !isCropMode}
 							<div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
 								<div class="rounded-full bg-black/50 px-3 py-1 text-xs text-white backdrop-blur-sm">
-									{currentImageIndex + 1} / {getCurrentBatch()?.images?.length || 0}
+									{currentImageIndex + 1} / {expandedImages.length}
 								</div>
 							</div>
 						{/if}

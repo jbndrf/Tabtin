@@ -14,7 +14,8 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { t } from '$lib/i18n';
 	import * as m from '$lib/paraglide/messages';
-	import { ChevronDown, Plus, Trash2, ChevronLeft, ChevronRight, Save, Check, ChevronsUpDown, HelpCircle } from 'lucide-svelte';
+	import { ChevronDown, Plus, Trash2, ChevronLeft, ChevronRight, Save, Check, ChevronsUpDown, HelpCircle, MessageSquare } from 'lucide-svelte';
+	import { SchemaChat, type Message as SchemaChatMessage } from '$lib/components/schema-chat';
 	import { toast } from '$lib/utils/toast';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, isProjectLoading } from '$lib/stores/project-data';
@@ -43,6 +44,7 @@
 	let currentColumnIndex = $state(0);
 	let activeTab = $state('basic');
 	let modelComboboxOpen = $state(false);
+	let schemaChatOpen = $state(false);
 
 	// Column state
 	type Column = {
@@ -77,8 +79,9 @@
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
 
-	// Extraction mode setting
-	let extractionMode = $state<'single_row' | 'multi_row'>('single_row');
+	// Schema chat history
+	let schemaChatHistory = $state<SchemaChatMessage[]>([]);
+
 
 	// Load project data on mount
 	onMount(async () => {
@@ -146,8 +149,8 @@
 			requestsPerMinute = settings.requestsPerMinute || 15;
 			enableParallelRequests = settings.enableParallelRequests || false;
 
-			// Load extraction mode from project root (not settings)
-			extractionMode = $currentProject.extraction_mode || 'single_row';
+			// Load schema chat history
+			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
 
 			if (settings.columns && settings.columns.length > 0) {
 				columns = settings.columns.map((col: any) => ({
@@ -312,7 +315,6 @@
 
 			await pb.collection('projects').update(data.projectId, {
 				name: projectName,
-				extraction_mode: extractionMode,
 				settings
 			});
 
@@ -336,6 +338,18 @@
 		} catch (err) {
 			console.error('Failed to delete project:', err);
 			toast.error('Failed to delete project');
+		}
+	}
+
+	async function saveChatHistory(messages: SchemaChatMessage[]) {
+		try {
+			schemaChatHistory = messages;
+			await pb.collection('projects').update(data.projectId, {
+				schema_chat_history: messages
+			});
+		} catch (err) {
+			console.error('Failed to save chat history:', err);
+			// Silently fail - chat history is not critical
 		}
 	}
 
@@ -421,43 +435,6 @@
 					/>
 				</div>
 
-				<div class="space-y-2">
-					<div class="flex items-center justify-between">
-						<Label for="extractionMode">Extraction Mode</Label>
-						<Tooltip.Provider>
-							<Tooltip.Root>
-								<Tooltip.Trigger asChild>
-									{#snippet child({ props })}
-										<button type="button" {...props} class="text-muted-foreground hover:text-foreground">
-											<HelpCircle class="h-4 w-4" />
-										</button>
-									{/snippet}
-								</Tooltip.Trigger>
-								<Tooltip.Content side="left" class="max-w-xs">
-									<p class="text-sm">
-										<strong>Single Row:</strong> Extract one record per document (invoices, receipts).<br/>
-										<strong>Multi-Row:</strong> Extract multiple records from one document (bank statements with multiple transactions).
-									</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						</Tooltip.Provider>
-					</div>
-					<select
-						id="extractionMode"
-						bind:value={extractionMode}
-						class="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<option value="single_row">Single Row (Default)</option>
-						<option value="multi_row">Multi-Row (Bank Statements)</option>
-					</select>
-					<p class="text-xs text-muted-foreground">
-						{#if extractionMode === 'single_row'}
-							Extract one record per document. Best for invoices, receipts, and forms.
-						{:else}
-							Extract multiple records from each document. Best for bank statements and transaction lists.
-						{/if}
-					</p>
-				</div>
 			</div>
 
 			<Separator />
@@ -662,6 +639,28 @@
 					{/if}
 				</div>
 			</div>
+
+			<!-- Schema Chat FAB -->
+			{#if !loading}
+				<Tooltip.Root>
+					<Tooltip.Trigger asChild>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								variant="default"
+								size="icon"
+								class="fixed bottom-20 right-4 md:bottom-6 md:right-6 h-14 w-14 rounded-full shadow-lg z-50"
+								onclick={() => schemaChatOpen = true}
+							>
+								<MessageSquare class="h-6 w-6" />
+							</Button>
+						{/snippet}
+					</Tooltip.Trigger>
+					<Tooltip.Content side="left">
+						<p>AI Schema Assistant</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
 		</Tabs.Content>
 
 		<!-- Prompts Tab -->
@@ -681,14 +680,8 @@
 						bind:value={selectedPreset}
 						class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
-						<optgroup label="Single-Row Extraction">
-							<option value="qwen3vl">Qwen3 VL</option>
-							<option value="gemini2">Gemini 2.0</option>
-						</optgroup>
-						<optgroup label="Multi-Row Extraction (Bank Statements)">
-							<option value="qwen3vl_multirow">Qwen3 VL (Multi-Row)</option>
-							<option value="gemini2_multirow">Gemini 2.0 (Multi-Row)</option>
-						</optgroup>
+						<option value="qwen3vl">Qwen3 VL</option>
+						<option value="gemini2">Gemini 2.0</option>
 					</select>
 					<p class="text-xs text-muted-foreground">
 						{t('project.settings.prompts.preset_auto_apply')}
@@ -1108,3 +1101,25 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<!-- Schema Chat -->
+{#if !loading}
+	<SchemaChat
+		bind:open={schemaChatOpen}
+		projectId={data.projectId}
+		{endpoint}
+		{apiKey}
+		{modelName}
+		{columns}
+		projectDescription={description}
+		chatHistory={schemaChatHistory}
+		onColumnsChange={(newColumns) => {
+			columns = newColumns.map(col => ({ ...col, expanded: col.expanded ?? false }));
+		}}
+		onDescriptionChange={(newDescription) => {
+			description = newDescription;
+		}}
+		onChatHistoryChange={saveChatHistory}
+		onClose={() => schemaChatOpen = false}
+	/>
+{/if}

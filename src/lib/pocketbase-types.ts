@@ -171,14 +171,10 @@ export type ProcessingMetricsRecord = {
 	updated?: IsoDateString
 }
 
-export enum ProjectsExtractionModeOptions {
-	"single_row" = "single_row",
-	"multi_row" = "multi_row",
-}
-export type ProjectsRecord<Tsettings = unknown> = {
-	extraction_mode?: ProjectsExtractionModeOptions
+export type ProjectsRecord<Tschema_chat_history = unknown, Tsettings = unknown> = {
 	id: string
 	name: string
+	schema_chat_history?: null | Tschema_chat_history
 	settings?: null | Tsettings
 	user: RecordIdString[]
 }
@@ -233,7 +229,7 @@ export type ExtractionRowsResponse<Trow_data = unknown, Texpand = unknown> = Req
 export type ImageBatchesResponse<Tprocessed_data = unknown, Texpand = unknown> = Required<ImageBatchesRecord<Tprocessed_data>> & BaseSystemFields<Texpand>
 export type ImagesResponse<Tbbox_used = unknown, Texpand = unknown> = Required<ImagesRecord<Tbbox_used>> & BaseSystemFields<Texpand>
 export type ProcessingMetricsResponse<Texpand = unknown> = Required<ProcessingMetricsRecord> & BaseSystemFields<Texpand>
-export type ProjectsResponse<Tsettings = unknown, Texpand = unknown> = Required<ProjectsRecord<Tsettings>> & BaseSystemFields<Texpand>
+export type ProjectsResponse<Tschema_chat_history = unknown, Tsettings = unknown, Texpand = unknown> = Required<ProjectsRecord<Tschema_chat_history, Tsettings>> & BaseSystemFields<Texpand>
 export type QueueJobsResponse<Tdata = unknown, Texpand = unknown> = Required<QueueJobsRecord<Tdata>> & BaseSystemFields<Texpand>
 export type UsersResponse<Texpand = unknown> = Required<UsersRecord> & AuthSystemFields<Texpand>
 
