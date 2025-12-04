@@ -746,10 +746,16 @@
 		</Sheet.Content>
 	</Sheet.Root>
 {:else}
-	<!-- Mobile: Drawer -->
-	<Drawer.Root bind:open onOpenChange={(o) => !o && handleClose()}>
+	<!-- Mobile: Drawer with snap points for pull up/down -->
+	<Drawer.Root
+		bind:open
+		onOpenChange={(o) => !o && handleClose()}
+		snapPoints={[0.4, 0.85]}
+		activeSnapPoint={0.85}
+	>
 		<Drawer.Content class="max-h-[85vh] flex flex-col">
-			<Drawer.Header>
+			<Drawer.Handle class="mx-auto mt-4 h-2 w-[100px] shrink-0 rounded-full bg-muted" />
+			<Drawer.Header class="pt-2">
 				<div class="flex items-start justify-between">
 					<div>
 						<Drawer.Title>Schema Assistant</Drawer.Title>

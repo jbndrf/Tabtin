@@ -22,7 +22,12 @@
 
 <div class="space-y-3">
 	<div class="space-y-1">
-		<Badge variant="outline" class="text-xs">{question.header}</Badge>
+		<div class="flex items-center gap-2">
+			<Badge variant="outline" class="text-xs">{question.header}</Badge>
+			{#if question.multiSelect}
+				<span class="text-xs text-muted-foreground">(select multiple)</span>
+			{/if}
+		</div>
 		<p class="text-sm font-medium">{question.questionText}</p>
 	</div>
 

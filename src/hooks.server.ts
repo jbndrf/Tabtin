@@ -1,18 +1,33 @@
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import PocketBase from 'pocketbase';
 import { redirect, type Handle } from '@sveltejs/kit';
-import { startWorker } from '$lib/server/queue';
+import { startWorker, stopWorker } from '$lib/server/queue';
 
-// Start the background worker on server startup
-let workerStarted = false;
-if (!workerStarted) {
+// Use a global variable to track worker state across hot-reloads
+// This is necessary because module-level variables are reset on hot-reload
+declare global {
+	// eslint-disable-next-line no-var
+	var __queueWorkerStarted: boolean;
+	// eslint-disable-next-line no-var
+	var __queueWorkerStarting: boolean;
+}
+
+// Initialize globals if they don't exist
+globalThis.__queueWorkerStarted = globalThis.__queueWorkerStarted ?? false;
+globalThis.__queueWorkerStarting = globalThis.__queueWorkerStarting ?? false;
+
+// Start the background worker on server startup (only once)
+if (!globalThis.__queueWorkerStarted && !globalThis.__queueWorkerStarting) {
+	globalThis.__queueWorkerStarting = true;
 	startWorker()
 		.then(() => {
 			console.log('[Queue] Background worker started successfully');
-			workerStarted = true;
+			globalThis.__queueWorkerStarted = true;
+			globalThis.__queueWorkerStarting = false;
 		})
 		.catch((error) => {
 			console.error('[Queue] Failed to start background worker:', error);
+			globalThis.__queueWorkerStarting = false;
 		});
 }
 

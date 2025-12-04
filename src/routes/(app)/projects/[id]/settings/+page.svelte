@@ -23,7 +23,7 @@
 	import type { PageData } from './$types';
 	import { setPageActions, clearPageActions } from '$lib/stores/page-actions';
 	import { onDestroy, onMount } from 'svelte';
-	import { PROMPT_PRESETS, getPresetById, DEFAULT_PROMPT_TEMPLATE, type CoordinateFormat } from '$lib/prompt-presets';
+	import { PROMPT_PRESETS, getPresetById, DEFAULT_PROMPT_TEMPLATE, buildPromptTemplate, MULTI_ROW_ADDON, type CoordinateFormat } from '$lib/prompt-presets';
 
 	let { data }: { data: PageData } = $props();
 
@@ -78,6 +78,9 @@
 	// Rate limiting settings
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
+
+	// Extraction mode
+	let multiRowExtraction = $state<boolean>(false);
 
 	// Schema chat history
 	let schemaChatHistory = $state<SchemaChatMessage[]>([]);
@@ -148,6 +151,9 @@
 			// Load rate limiting settings
 			requestsPerMinute = settings.requestsPerMinute || 15;
 			enableParallelRequests = settings.enableParallelRequests || false;
+
+			// Load extraction mode
+			multiRowExtraction = settings.multiRowExtraction || false;
 
 			// Load schema chat history
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -303,6 +309,7 @@
 				coordinateFormat,
 				requestsPerMinute,
 				enableParallelRequests,
+				multiRowExtraction,
 				columns: columns.map((col, index) => ({
 					id: String(index + 1),
 					name: col.name,
@@ -353,11 +360,26 @@
 		}
 	}
 
+	function getBboxOrder(format: CoordinateFormat): string {
+		switch (format) {
+			case 'normalized_1000_yxyx':
+			case 'normalized_1024_yxyx':
+				return '[y_min, x_min, y_max, x_max]';
+			default:
+				return '[x1, y1, x2, y2]';
+		}
+	}
+
 	function generateFullPrompt(): string {
-		let template = promptTemplate || DEFAULT_PROMPT_TEMPLATE;
+		// Build template based on multi-row setting
+		let template = buildPromptTemplate(multiRowExtraction);
+		const bboxOrder = getBboxOrder(coordinateFormat);
 
 		if (columns.length === 0) {
-			return template.replace('{{FIELDS}}', '(No fields defined yet. Add columns to see the full prompt.)').replace('{{FIELD_EXAMPLES}}', '');
+			return template
+				.replace('{{FIELDS}}', '(No fields defined yet. Add columns to see the full prompt.)')
+				.replace('{{FIELD_EXAMPLES}}', '')
+				.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
 		}
 
 		// Generate fields section
@@ -379,24 +401,29 @@
 			fieldsSection += '\n';
 		});
 
-		// Generate field examples section
+		// Generate field examples section with actual column IDs/names
+		// Include row_index only when multi-row is enabled
 		let fieldExamples = '';
 		columns.forEach((col, index) => {
 			const isLast = index === columns.length - 1;
 			fieldExamples += '    {\n';
+			if (multiRowExtraction) {
+				fieldExamples += '      "row_index": 0,\n';
+			}
 			fieldExamples += `      "column_id": "${col.id}",\n`;
 			fieldExamples += `      "column_name": "${col.name}",\n`;
 			fieldExamples += '      "value": "extracted value here",\n';
 			fieldExamples += '      "image_index": 0,\n';
-			fieldExamples += '      "bbox_2d": [x1, y1, x2, y2],\n';
+			fieldExamples += `      "bbox_2d": ${bboxOrder},\n`;
 			fieldExamples += '      "confidence": 0.95\n';
 			fieldExamples += `    }${isLast ? '' : ','}\n`;
 		});
 
 		// Replace placeholders
 		return template
-			.replace('{{FIELDS}}', fieldsSection.trim())
-			.replace('{{FIELD_EXAMPLES}}', fieldExamples);
+			.replace(/\{\{FIELDS\}\}/g, fieldsSection.trim())
+			.replace(/\{\{FIELD_EXAMPLES\}\}/g, fieldExamples)
+			.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
 	}
 </script>
 
@@ -827,6 +854,44 @@
 										<p class="text-xs">Multiple batches can be processed simultaneously. The rate limiter uses a sliding window to ensure the requests per minute limit is never exceeded.</p>
 									</div>
 									<p class="text-xs italic">The pipeline never breaks - it simply waits when limits are reached.</p>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+
+				<Separator />
+
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="multiRowExtraction"
+								bind:checked={multiRowExtraction}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="multiRowExtraction" class="cursor-pointer">Multi-Row Extraction</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">Single Row (Default)</p>
+										<p class="text-xs">Each image contains one item to extract. Use this for product labels, business cards, single documents, etc.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">Multi-Row Mode</p>
+										<p class="text-xs">Each image may contain multiple items/transactions/entries. Use this for bank statements, receipts with line items, invoices with multiple products, etc.</p>
+									</div>
+									<p class="text-xs italic">Note: Multilingual content on a single item is NOT treated as multiple rows.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>

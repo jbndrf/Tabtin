@@ -2,12 +2,15 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Table from '$lib/components/ui/table';
-	import { Loader2, X, Plus, Camera } from 'lucide-svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Loader2, X, Plus, Camera, ChevronDown, ChevronRight, Images } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, projectBatches, projectStats, isProjectLoading, type BatchWithData } from '$lib/stores/project-data';
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/utils/toast';
+	import { loadExtractionRows } from '$lib/utils/extraction-rows';
+	import type { ExtractionRow } from '$lib/types/extraction';
 
 	// Camera input reference
 	let cameraInput: HTMLInputElement;
@@ -58,6 +61,62 @@
 	let columns = $state<ColumnDefinition[]>([]);
 	let tableScrollContainer: HTMLDivElement | undefined = $state();
 
+	// Expanded rows state - tracks which batches are expanded
+	let expandedBatches = $state<Set<string>>(new Set());
+	// Cache for loaded extraction rows per batch
+	let batchExtractionRows = $state<Map<string, ExtractionRow[]>>(new Map());
+	// Loading state for extraction rows
+	let loadingExtractionRows = $state<Set<string>>(new Set());
+
+	// Batch images modal state
+	let batchImagesModalOpen = $state(false);
+	let selectedBatchForImages = $state<BatchWithData | null>(null);
+
+	async function toggleBatchExpand(batch: BatchWithData) {
+		const batchId = batch.id;
+
+		if (expandedBatches.has(batchId)) {
+			// Collapse
+			expandedBatches.delete(batchId);
+			expandedBatches = new Set(expandedBatches);
+		} else {
+			// Expand - load extraction rows if not already loaded
+			if (!batchExtractionRows.has(batchId)) {
+				loadingExtractionRows.add(batchId);
+				loadingExtractionRows = new Set(loadingExtractionRows);
+
+				try {
+					const rows = await loadExtractionRows(pb, batchId);
+					batchExtractionRows.set(batchId, rows);
+					batchExtractionRows = new Map(batchExtractionRows);
+				} catch (error) {
+					console.error('Failed to load extraction rows:', error);
+					toast.error('Failed to load extraction rows');
+				} finally {
+					loadingExtractionRows.delete(batchId);
+					loadingExtractionRows = new Set(loadingExtractionRows);
+				}
+			}
+
+			expandedBatches.add(batchId);
+			expandedBatches = new Set(expandedBatches);
+		}
+	}
+
+	function openBatchImagesModal(batch: BatchWithData, e: Event) {
+		e.stopPropagation();
+		selectedBatchForImages = batch;
+		batchImagesModalOpen = true;
+	}
+
+	function getImageUrl(image: any) {
+		return pb.files.getURL(image, image.image);
+	}
+
+	function isPdf(filename: string): boolean {
+		return filename?.toLowerCase().endsWith('.pdf');
+	}
+
 	// Status color schemes with transparent backgrounds
 	function getStatusColors(status: string): string {
 		switch(status) {
@@ -83,8 +142,23 @@
 
 	function getValueForColumn(batch: BatchWithData, columnId: string): string {
 		if (!batch.processed_data) return '';
-		const extraction = batch.processed_data.extractions?.find(e => e.column_id === columnId);
+		// For multi-row batches, show first row (row_index 0) data
+		const extraction = batch.processed_data.extractions?.find(
+			e => e.column_id === columnId && (e.row_index === 0 || e.row_index === undefined)
+		);
 		return extraction?.value ?? '';
+	}
+
+	function deduplicateRows(rows: ExtractionRow[]): ExtractionRow[] {
+		// Remove duplicate rows with the same row_index, keeping the first occurrence
+		const seen = new Set<number>();
+		return rows.filter(row => {
+			if (seen.has(row.rowIndex)) {
+				return false;
+			}
+			seen.add(row.rowIndex);
+			return true;
+		});
 	}
 
 	async function loadProjectData(projectId: string) {
@@ -94,24 +168,6 @@
 
 			if ($currentProject?.settings?.columns) {
 				columns = $currentProject.settings.columns;
-			}
-
-			// Load pending batches and enqueue them for automatic processing
-			const pendingBatches = await pb.collection('image_batches').getFullList({
-				filter: `project = "${projectId}" && status = "pending"`,
-				sort: '+id'
-			});
-
-			if (pendingBatches.length > 0) {
-				await fetch('/api/queue/enqueue', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						batchIds: pendingBatches.map(b => b.id),
-						projectId: projectId,
-						priority: 10
-					})
-				});
 			}
 
 			// Scroll table to bottom after content is loaded
@@ -261,6 +317,7 @@
 							<Table.Root>
 								<Table.Header class="sticky top-0 z-10 bg-background border-b">
 									<Table.Row>
+										<Table.Head class="bg-background border-b w-8"></Table.Head>
 										<Table.Head class="bg-background border-b">Batch</Table.Head>
 										<Table.Head class="bg-background border-b">Created</Table.Head>
 										<Table.Head class="bg-background border-b">Status</Table.Head>
@@ -271,22 +328,84 @@
 								</Table.Header>
 								<Table.Body>
 									{#each $projectBatches.slice().reverse() as batch}
-										<Table.Row class={getStatusColors(batch.status)}>
-											<Table.Cell class="font-mono text-xs">{batch.id.slice(0, 8)}</Table.Cell>
+										{@const isExpanded = expandedBatches.has(batch.id)}
+										{@const isLoading = loadingExtractionRows.has(batch.id)}
+										{@const rawExtractionRows = batchExtractionRows.get(batch.id) || []}
+										{@const extractionRows = deduplicateRows(rawExtractionRows)}
+										{@const additionalRows = extractionRows.slice(1)}
+										<!-- Main batch row -->
+										<Table.Row
+											class="{getStatusColors(batch.status)} cursor-pointer hover:bg-accent/50 transition-colors"
+											onclick={() => toggleBatchExpand(batch)}
+										>
+											<Table.Cell class="w-8 px-2">
+												{#if isLoading}
+													<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+												{:else if isExpanded}
+													<ChevronDown class="h-4 w-4 text-muted-foreground" />
+												{:else}
+													<ChevronRight class="h-4 w-4 text-muted-foreground" />
+												{/if}
+											</Table.Cell>
+											<Table.Cell class="font-mono text-xs">
+												<button
+													class="hover:underline hover:text-primary flex items-center gap-1"
+													onclick={(e) => openBatchImagesModal(batch, e)}
+												>
+													<Images class="h-3 w-3" />
+													{batch.id.slice(0, 8)}
+												</button>
+											</Table.Cell>
 											<Table.Cell class="text-xs">{new Date(batch.created).toLocaleDateString()}</Table.Cell>
 											<Table.Cell>
-												<Badge class="{getStatusBadgeColor(batch.status)} text-xs">
-													{batch.status}
-												</Badge>
+												<div class="flex items-center gap-2">
+													<Badge class="{getStatusBadgeColor(batch.status)} text-xs">
+														{batch.status}
+													</Badge>
+													{#if (batch.row_count ?? 1) > 1}
+														<span class="text-xs text-muted-foreground">
+															({batch.row_count} rows)
+														</span>
+													{/if}
+												</div>
 											</Table.Cell>
 											{#each columns as column}
 												<Table.Cell>{getValueForColumn(batch, column.id) || '-'}</Table.Cell>
 											{/each}
 										</Table.Row>
+										<!-- Expanded extraction rows (skip first row since it's shown in main row) -->
+										{#if isExpanded && additionalRows.length > 0}
+											{#each additionalRows as row, rowIdx}
+												<Table.Row class="bg-muted/30 border-l-2 border-l-primary/30">
+													<Table.Cell class="w-8 px-2"></Table.Cell>
+													<Table.Cell class="font-mono text-xs text-muted-foreground pl-6">
+														Row {row.rowIndex + 1}
+													</Table.Cell>
+													<Table.Cell class="text-xs text-muted-foreground">-</Table.Cell>
+													<Table.Cell>
+														<Badge variant="outline" class="text-xs">
+															{row.status}
+														</Badge>
+													</Table.Cell>
+													{#each columns as column}
+														{@const extraction = row.data.find(e => e.column_id === column.id)}
+														<Table.Cell class="text-sm">
+															{extraction?.value || '-'}
+														</Table.Cell>
+													{/each}
+												</Table.Row>
+											{/each}
+										{:else if isExpanded && additionalRows.length === 0 && !isLoading}
+											<Table.Row class="bg-muted/30 border-l-2 border-l-primary/30">
+												<Table.Cell colspan={columns.length + 4} class="text-center text-muted-foreground text-sm py-2">
+													No additional rows
+												</Table.Cell>
+											</Table.Row>
+										{/if}
 									{/each}
 									<!-- Empty row for spacing to prevent last row from being hidden by scrollbar -->
 									<Table.Row class="h-4 hover:bg-transparent">
-										<Table.Cell colspan={columns.length + 3} class="p-0"></Table.Cell>
+										<Table.Cell colspan={columns.length + 4} class="p-0"></Table.Cell>
 									</Table.Row>
 								</Table.Body>
 							</Table.Root>
@@ -326,3 +445,67 @@
 		</div>
 	</div>
 {/if}
+
+<!-- Batch Images Modal -->
+<Dialog.Root bind:open={batchImagesModalOpen}>
+	<Dialog.Content class="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+		<Dialog.Header>
+			<Dialog.Title>
+				Batch Images - {selectedBatchForImages?.id.slice(0, 8)}
+			</Dialog.Title>
+		</Dialog.Header>
+
+		<div class="flex-1 overflow-y-auto py-4">
+			{#if selectedBatchForImages?.images && selectedBatchForImages.images.length > 0}
+				<div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+					{#each selectedBatchForImages.images as image, idx}
+						{@const imageUrl = getImageUrl(image)}
+						{@const isFilePdf = isPdf(image.image)}
+						<div class="relative aspect-square rounded-lg overflow-hidden border bg-muted">
+							{#if isFilePdf}
+								<!-- PDF file - show iframe or fallback -->
+								<a
+									href={imageUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="w-full h-full flex flex-col items-center justify-center bg-muted hover:bg-muted/80 transition-colors"
+								>
+									<svg class="h-12 w-12 text-muted-foreground mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+									</svg>
+									<span class="text-xs text-muted-foreground text-center px-2">PDF Document</span>
+									<span class="text-xs text-primary mt-1">Click to open</span>
+								</a>
+							{:else}
+								<!-- Regular image -->
+								<img
+									src={imageUrl}
+									alt="Batch image {idx + 1}"
+									class="w-full h-full object-cover"
+								/>
+							{/if}
+							<div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs px-2 py-1">
+								{isFilePdf ? 'PDF' : 'Image'} {idx + 1}
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<div class="text-center text-muted-foreground py-8">
+					No images found for this batch
+				</div>
+			{/if}
+		</div>
+
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => batchImagesModalOpen = false}>
+				Close
+			</Button>
+			{#if selectedBatchForImages}
+				<Button onclick={() => goto(`/projects/${data.projectId}/images/${selectedBatchForImages?.id}`)}>
+					View Details
+				</Button>
+			{/if}
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

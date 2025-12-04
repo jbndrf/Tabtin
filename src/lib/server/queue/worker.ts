@@ -5,6 +5,7 @@ import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
 import { convertPdfToImages, isPdfFile } from '../pdf-converter';
+import { buildPromptTemplate, MULTI_ROW_ADDON } from '$lib/prompt-presets';
 
 export class QueueWorker {
 	private queueManager: QueueManager;
@@ -30,7 +31,7 @@ export class QueueWorker {
 
 	private async authenticate(email: string, password: string): Promise<void> {
 		try {
-			await this.pb.admins.authWithPassword(email, password);
+			await this.pb.collection('_superusers').authWithPassword(email, password);
 		} catch (error) {
 			console.error('Worker authentication failed:', error);
 			throw error;
@@ -46,8 +47,57 @@ export class QueueWorker {
 		this.isRunning = true;
 		console.log('Queue worker started');
 
+		// Clean up any orphaned "processing" batches from previous runs
+		await this.cleanupStaleBatches();
+
 		// Process jobs continuously
 		this.processLoop();
+	}
+
+	private async cleanupStaleBatches(): Promise<void> {
+		try {
+			console.log('[Queue] Checking for stale processing batches...');
+
+			// Find all batches stuck in "processing" status
+			const staleBatches = await this.pb.collection('image_batches').getFullList({
+				filter: 'status = "processing"'
+			});
+
+			if (staleBatches.length === 0) {
+				console.log('[Queue] No stale batches found');
+				return;
+			}
+
+			console.log(`[Queue] Found ${staleBatches.length} batches in processing status`);
+
+			// For each stale batch, check if there's an active queue job
+			for (const batch of staleBatches) {
+				try {
+					const activeJobs = await this.pb.collection('queue_jobs').getFullList({
+						filter: `status = "processing"`
+					});
+
+					// Check if any active job is for this batch
+					const hasActiveJob = activeJobs.some(
+						(job: any) => job.data?.batchId === batch.id
+					);
+
+					if (!hasActiveJob) {
+						// No active job - reset batch to pending
+						await this.pb.collection('image_batches').update(batch.id, {
+							status: 'pending'
+						});
+						console.log(`[Queue] Reset orphaned batch ${batch.id} to pending`);
+					}
+				} catch (err) {
+					console.error(`[Queue] Error checking batch ${batch.id}:`, err);
+				}
+			}
+
+			console.log('[Queue] Stale batch cleanup complete');
+		} catch (error) {
+			console.error('[Queue] Error during stale batch cleanup:', error);
+		}
 	}
 
 	async stop(): Promise<void> {
@@ -165,10 +215,13 @@ export class QueueWorker {
 			}
 
 			// Generate prompt
+			const bboxOrder = this.getBboxOrder(settings.coordinateFormat);
+			const multiRowEnabled = settings.multiRowExtraction || false;
 			const prompt = this.generatePrompt(
-				settings.promptTemplate,
 				settings.columns,
-				settings.coordinateFormat
+				settings.coordinateFormat,
+				bboxOrder,
+				multiRowEnabled
 			);
 
 			// Build content array with images and extracted text
@@ -205,9 +258,7 @@ export class QueueWorker {
 								role: 'user',
 								content: contentArray
 							}
-						],
-						temperature: 0.1,
-						max_tokens: 4000
+						]
 					})
 				});
 
@@ -451,8 +502,7 @@ export class QueueWorker {
 									}))
 								]
 							}
-						],
-						temperature: 0.1
+						]
 					})
 				});
 
@@ -623,8 +673,9 @@ export class QueueWorker {
 		return `data:${mimeType};base64,${base64}`;
 	}
 
-	private generatePrompt(template: string, columns: any[], coordinateFormat: string): string {
-		let prompt = template;
+	private generatePrompt(columns: any[], coordinateFormat: string, bboxOrder: string = '[x1, y1, x2, y2]', multiRowEnabled: boolean = false): string {
+		// Build the base template, conditionally adding multi-row instructions
+		let prompt = buildPromptTemplate(multiRowEnabled);
 
 		// Generate fields section
 		let fieldsSection = '';
@@ -645,38 +696,29 @@ export class QueueWorker {
 			fieldsSection += '\n';
 		});
 
-		// Generate field examples section for Gemini format
-		let fieldExamplesGemini = '';
-		columns.forEach((col, index) => {
-			const isLast = index === columns.length - 1;
-			fieldExamplesGemini += '    {\n';
-			fieldExamplesGemini += `      "field_name": "${col.name}",\n`;
-			fieldExamplesGemini += '      "value": "extracted value here",\n';
-			fieldExamplesGemini += '      "image_index": 0,\n';
-			fieldExamplesGemini += '      "bbox_2d": [x1, y1, x2, y2],\n';
-			fieldExamplesGemini += '      "confidence": 0.95\n';
-			fieldExamplesGemini += `    }${isLast ? '' : ','}\n`;
-		});
-
-		// Generate field examples section for Qwen format
+		// Generate field examples section with actual column IDs/names
+		// Include row_index only when multi-row is enabled
 		let fieldExamples = '';
 		columns.forEach((col, index) => {
 			const isLast = index === columns.length - 1;
 			fieldExamples += '    {\n';
+			if (multiRowEnabled) {
+				fieldExamples += '      "row_index": 0,\n';
+			}
 			fieldExamples += `      "column_id": "${col.id}",\n`;
 			fieldExamples += `      "column_name": "${col.name}",\n`;
 			fieldExamples += '      "value": "extracted value here",\n';
 			fieldExamples += '      "image_index": 0,\n';
-			fieldExamples += '      "bbox_2d": [x1, y1, x2, y2],\n';
+			fieldExamples += `      "bbox_2d": ${bboxOrder},\n`;
 			fieldExamples += '      "confidence": 0.95\n';
 			fieldExamples += `    }${isLast ? '' : ','}\n`;
 		});
 
 		// Replace placeholders
 		prompt = prompt
-			.replace('{{FIELDS}}', fieldsSection.trim())
-			.replace('{{FIELD_EXAMPLES_GEMINI}}', fieldExamplesGemini)
-			.replace('{{FIELD_EXAMPLES}}', fieldExamples);
+			.replace(/\{\{FIELDS\}\}/g, fieldsSection.trim())
+			.replace(/\{\{FIELD_EXAMPLES\}\}/g, fieldExamples)
+			.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
 
 		prompt += `\n\nCoordinate Format: ${coordinateFormat}`;
 
@@ -1019,5 +1061,20 @@ export class QueueWorker {
 
 	getStats() {
 		return this.connectionPool.getStats();
+	}
+
+	private getBboxOrder(coordinateFormat: string): string {
+		// Map coordinate format to bbox order string for prompt examples
+		switch (coordinateFormat) {
+			case 'normalized_1000_yxyx':
+			case 'normalized_1024_yxyx':
+				return '[y_min, x_min, y_max, x_max]';
+			case 'normalized_1000':
+			case 'normalized_1':
+			case 'pixels':
+			case 'yolo':
+			default:
+				return '[x1, y1, x2, y2]';
+		}
 	}
 }

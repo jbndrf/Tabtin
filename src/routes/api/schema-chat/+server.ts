@@ -238,9 +238,7 @@ async function handleChatMode(body: ChatModeRequest) {
 			model: settings.modelName,
 			messages: llmMessages,
 			tools: SCHEMA_CHAT_TOOLS,
-			tool_choice: 'auto',
-			temperature: 0.7,
-			max_tokens: 2000
+			tool_choice: 'auto'
 		})
 	});
 

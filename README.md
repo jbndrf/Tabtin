@@ -331,11 +331,11 @@ npm  install
 
 Update `.env` for local development:
 
-  
+
 
 ```env
 
-POCKETBASE_URL=http://127.0.0.1:8090
+PUBLIC_POCKETBASE_URL=http://127.0.0.1:8090
 
 ```
 

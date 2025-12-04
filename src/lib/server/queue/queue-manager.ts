@@ -28,7 +28,7 @@ export class QueueManager {
 		const pb = new PocketBase(this.pocketbaseUrl);
 		pb.autoCancellation(false); // Disable auto-cancellation
 		try {
-			await pb.admins.authWithPassword(this.adminEmail, this.adminPassword);
+			await pb.collection('_superusers').authWithPassword(this.adminEmail, this.adminPassword);
 		} catch (error) {
 			console.error('Queue manager authentication failed:', error);
 			throw error;
@@ -86,9 +86,12 @@ export class QueueManager {
 	async getNextJob(): Promise<QueueJob | null> {
 		try {
 			const pb = await this.getPocketBase();
+
+			// Use atomic update with filter to prevent race conditions
+			// Only get jobs that are still "queued" - if another worker grabbed it, this will fail
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
 				filter: 'status = "queued"',
-				sort: '+priority'
+				sort: '+priority,+created' // Also sort by created for FIFO within same priority
 			});
 
 			if (records.items.length === 0) {
@@ -97,13 +100,32 @@ export class QueueManager {
 
 			const record = records.items[0];
 
-			const updated = await pb.collection(QUEUE_COLLECTION).update(record.id, {
-				status: 'processing',
-				startedAt: new Date().toISOString(),
-				attempts: record.attempts + 1
-			});
+			// Attempt to atomically claim this job by updating only if still queued
+			// PocketBase doesn't have native atomic updates, so we use optimistic locking
+			// Re-fetch to check if it's still queued before updating
+			try {
+				const freshRecord = await pb.collection(QUEUE_COLLECTION).getOne(record.id);
+				if (freshRecord.status !== 'queued') {
+					// Job was already claimed by another worker
+					console.log(`[Queue] Job ${record.id} already claimed by another worker, skipping`);
+					return null;
+				}
 
-			return this.mapRecordToJob(updated);
+				const updated = await pb.collection(QUEUE_COLLECTION).update(record.id, {
+					status: 'processing',
+					startedAt: new Date().toISOString(),
+					attempts: freshRecord.attempts + 1
+				});
+
+				return this.mapRecordToJob(updated);
+			} catch (updateError: any) {
+				// If update fails (e.g., record modified by another process), return null
+				if (updateError.status === 404 || updateError.status === 409) {
+					console.log(`[Queue] Job ${record.id} was modified/deleted by another process`);
+					return null;
+				}
+				throw updateError;
+			}
 		} catch (error) {
 			console.error('Error getting next job:', error);
 			return null;
@@ -268,14 +290,17 @@ export class QueueManager {
 	async cancelQueuedJobs(projectId: string, batchIds?: string[]): Promise<number> {
 		const pb = await this.getPocketBase();
 
-		// Base filter without batchIds to avoid URL length limits
-		const filter = `projectId = "${projectId}" && (status = "queued" || status = "processing")`;
+		// Only cancel queued jobs, not processing ones (to avoid orphaned batch statuses)
+		const filter = `projectId = "${projectId}" && status = "queued"`;
+
+		console.log('[cancelQueuedJobs] Starting with filter:', filter);
 
 		// Get all matching records
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
-			filter,
-			skipTotal: 1
+			filter
 		});
+
+		console.log('[cancelQueuedJobs] Found', records.length, 'queue jobs to process');
 
 		// Filter in memory if batchIds provided
 		const recordsToDelete = batchIds && batchIds.length > 0
@@ -284,6 +309,8 @@ export class QueueManager {
 				return batchId && batchIds.includes(batchId);
 			})
 			: records;
+
+		console.log('[cancelQueuedJobs] Will delete', recordsToDelete.length, 'queue jobs');
 
 		// Delete records in parallel batches to improve performance
 		const deletePromises = recordsToDelete.map(record =>
@@ -296,6 +323,8 @@ export class QueueManager {
 		);
 
 		await Promise.all(deletePromises);
+
+		console.log('[cancelQueuedJobs] Successfully deleted', recordsToDelete.length, 'queue jobs');
 
 		return recordsToDelete.length;
 	}
