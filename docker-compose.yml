@@ -10,7 +10,7 @@ services:
       - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL}
       - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD}
     volumes:
-      - pocketbase_data:/pb/pb_data
+      - ./data/pb_data:/pb/pb_data
     ports:
       - "8090:8090"
     networks:
@@ -57,10 +57,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-volumes:
-  pocketbase_data:
-    driver: local
 
 networks:
   app-network:
