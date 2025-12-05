@@ -878,21 +878,21 @@
 			const batch = getCurrentBatch();
 			if (!batch) return;
 
-			// For multi-row batches, approve ALL remaining rows at once
+			// For multi-row batches, approve ALL remaining rows at once using batch API
 			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
 				filter: `batch = '${batch.id}' && status = 'review'`
 			});
 
 			if (allRemainingRows.length > 0) {
-				// Approve all remaining rows in parallel
-				await Promise.all(
-					allRemainingRows.map(r =>
-						pb.collection('extraction_rows').update(r.id, {
-							status: 'approved',
-							approved_at: now
-						})
-					)
-				);
+				// Use batch API for atomic transaction
+				const updateBatch = pb.createBatch();
+				for (const r of allRemainingRows) {
+					updateBatch.collection('extraction_rows').update(r.id, {
+						status: 'approved',
+						approved_at: now
+					});
+				}
+				await updateBatch.send();
 
 				toast.success(t('images.review.toast.accepted') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
 			}
@@ -921,33 +921,33 @@
 			const batch = getCurrentBatch();
 			if (!batch) return;
 
-			// For multi-row batches, decline ALL remaining rows at once
+			// For multi-row batches, decline ALL remaining rows at once using batch API
 			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
 				filter: `batch = '${batch.id}' && status = 'review'`
 			});
 
 			if (allRemainingRows.length > 0) {
-				// Decline all remaining rows in parallel
-				await Promise.all(
-					allRemainingRows.map(r =>
-						pb.collection('extraction_rows').update(r.id, {
-							status: 'deleted',
-							deleted_at: now
-						})
-					)
-				);
+				// Use batch API for atomic transaction
+				const updateBatch = pb.createBatch();
+				for (const r of allRemainingRows) {
+					updateBatch.collection('extraction_rows').update(r.id, {
+						status: 'deleted',
+						deleted_at: now
+					});
+				}
+				await updateBatch.send();
 
 				toast.success(t('images.review.toast.declined') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
 			}
 
-			// Check if any rows were approved before declining
-			const approvedRows = await pb.collection('extraction_rows').getFullList({
+			// Check if any rows were approved before declining (use getList for count only)
+			const approvedResult = await pb.collection('extraction_rows').getList(1, 1, {
 				filter: `batch = '${batch.id}' && status = 'approved'`
 			});
 
 			// Update batch status based on whether any rows were approved
 			await pb.collection('image_batches').update(batch.id, {
-				status: approvedRows.length > 0 ? 'approved' : 'failed'
+				status: approvedResult.totalItems > 0 ? 'approved' : 'failed'
 			});
 
 			// Move to next batch

@@ -330,26 +330,26 @@ export class QueueWorker {
 			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns);
 			console.log(`Parsed ${extractedRows.length} rows from LLM response`);
 
-			// Create extraction_rows records for each detected row
+			// Create extraction_rows records using batch API for better performance
 			// NOTE: PocketBase treats 0 as blank for required numeric fields, so we use 1-based indexing
+			const batch = this.pb.createBatch();
 			for (let rowIndex = 0; rowIndex < extractedRows.length; rowIndex++) {
-				try {
-					const recordData = {
-						batch: batchId,
-						project: projectId,
-						row_index: rowIndex + 1, // 1-based indexing (PocketBase treats 0 as blank)
-						row_data: extractedRows[rowIndex],
-						status: 'review'
-					};
-					console.log(`Creating extraction_row ${rowIndex + 1}:`, JSON.stringify(recordData, null, 2));
+				batch.collection('extraction_rows').create({
+					batch: batchId,
+					project: projectId,
+					row_index: rowIndex + 1, // 1-based indexing (PocketBase treats 0 as blank)
+					row_data: extractedRows[rowIndex],
+					status: 'review'
+				});
+			}
 
-					await this.pb.collection('extraction_rows').create(recordData);
-					console.log(`Created extraction_row ${rowIndex + 1} with ${extractedRows[rowIndex].length} extractions`);
-				} catch (err: any) {
-					console.error(`Failed to create extraction_row ${rowIndex + 1}:`, err);
-					console.error('Error details:', JSON.stringify(err.response, null, 2));
-					throw err;
-				}
+			try {
+				await batch.send();
+				console.log(`Created ${extractedRows.length} extraction_rows using batch API`);
+			} catch (err: any) {
+				console.error('Failed to create extraction_rows:', err);
+				console.error('Error details:', JSON.stringify(err.response, null, 2));
+				throw err;
 			}
 
 			// Update batch with metadata (keep processed_data for backward compatibility during transition)
@@ -409,13 +409,18 @@ export class QueueWorker {
 		const { batchIds, projectId } = job.data as any;
 
 		for (const batchId of batchIds) {
-			// Delete all existing extraction_rows for this batch (even if approved)
+			// Delete all existing extraction_rows for this batch using batch API
 			const existingRows = await this.pb.collection('extraction_rows').getFullList({
 				filter: `batch = "${batchId}"`
 			});
 
-			for (const row of existingRows) {
-				await this.pb.collection('extraction_rows').delete(row.id);
+			if (existingRows.length > 0) {
+				const deleteBatch = this.pb.createBatch();
+				for (const row of existingRows) {
+					deleteBatch.collection('extraction_rows').delete(row.id);
+				}
+				await deleteBatch.send();
+				console.log(`Deleted ${existingRows.length} extraction_rows using batch API`);
 			}
 
 			// Reset batch to pending and clear all processing-related data

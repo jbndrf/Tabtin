@@ -7,6 +7,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Send, Trash2, AlertTriangle, Paperclip } from 'lucide-svelte';
 	import { toast } from '$lib/utils/toast';
+	import { convertPdfToImages, isPdfFile } from '$lib/utils/pdf-api';
 	import ChatMessageComponent from './ChatMessage.svelte';
 	import QuestionsContainer from './QuestionsContainer.svelte';
 	import ToolProposalsContainer from './ToolProposalsContainer.svelte';
@@ -292,37 +293,6 @@
 		sendMessage("I'll skip providing example images for now. Please proceed with proposing columns based on our discussion.");
 	}
 
-	async function convertPdfToImages(file: File): Promise<File[]> {
-		const formData = new FormData();
-		formData.append('pdf', file);
-
-		const response = await fetch('/api/pdf/convert', {
-			method: 'POST',
-			body: formData
-		});
-
-		if (!response.ok) {
-			const error = await response.json();
-			throw new Error(error.error || 'PDF conversion failed');
-		}
-
-		const data = await response.json();
-
-		// Convert base64 images back to Files
-		const imageFiles: File[] = [];
-		for (const page of data.pages) {
-			const binary = atob(page.imageData);
-			const bytes = new Uint8Array(binary.length);
-			for (let i = 0; i < binary.length; i++) {
-				bytes[i] = binary.charCodeAt(i);
-			}
-			const blob = new Blob([bytes], { type: page.mimeType });
-			const imageFile = new File([blob], page.fileName, { type: page.mimeType });
-			imageFiles.push(imageFile);
-		}
-
-		return imageFiles;
-	}
 
 	async function handleFileUpload(e: Event) {
 		const input = e.target as HTMLInputElement;
@@ -338,7 +308,7 @@
 			const imageFiles: File[] = [];
 
 			for (const file of files) {
-				if (file.type === 'application/pdf') {
+				if (isPdfFile(file)) {
 					// Convert PDF to images
 					toast.info(`Converting ${file.name} to images...`);
 					const converted = await convertPdfToImages(file);

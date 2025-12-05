@@ -53,13 +53,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		});
 		console.log('[cancel endpoint] Found', batches.length, 'batches to reset');
 
-		// Reset batch statuses to failed with cancellation message
-		for (const batch of batches) {
-			console.log('[cancel endpoint] Resetting batch:', batch.id);
-			await pb.collection('image_batches').update(batch.id, {
-				status: 'failed',
-				error_message: 'Processing canceled by user'
-			});
+		// Reset batch statuses using batch API for atomic transaction
+		if (batches.length > 0) {
+			const updateBatch = pb.createBatch();
+			for (const batch of batches) {
+				updateBatch.collection('image_batches').update(batch.id, {
+					status: 'failed',
+					error_message: 'Processing canceled by user'
+				});
+			}
+			await updateBatch.send();
+			console.log('[cancel endpoint] Reset', batches.length, 'batches using batch API');
 		}
 
 		console.log('[cancel endpoint] Success! Returning response');

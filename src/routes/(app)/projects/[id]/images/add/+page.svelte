@@ -8,11 +8,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { pb } from '$lib/stores/auth';
 	import { toast } from '$lib/utils/toast';
-
-	// Helper to check if file is PDF
-	function isPdfFile(file: File): boolean {
-		return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-	}
+	import { isPdfFile } from '$lib/utils/pdf-api';
 
 	let projectId = $page.params.id as string;
 
@@ -127,37 +123,40 @@
 				status: 'pending'
 			});
 
-			// Step 2: Upload all images to the batch sequentially with progress tracking
-			for (let index = 0; index < selectedImages.length; index++) {
-				const img = selectedImages[index];
+			// Step 2: Upload images in parallel chunks for better performance
+			// Using chunks of 3 to balance speed vs server load
+			const CHUNK_SIZE = 3;
+			let completedCount = 0;
 
-				// Create record data with file
-				// Note: order starts at 1 because PocketBase treats 0 as blank for required number fields
-				const recordData: any = {
-					batch: batch.id,
-					order: index + 1,
-					image: img.file
-				};
+			for (let i = 0; i < selectedImages.length; i += CHUNK_SIZE) {
+				const chunk = selectedImages.slice(i, i + CHUNK_SIZE);
 
-				console.log('Uploading image:', { batchId: batch.id, fileName: img.file.name, order: index });
-				console.log('Record data:', recordData);
+				await Promise.all(
+					chunk.map(async (img, chunkIdx) => {
+						const index = i + chunkIdx;
+						const recordData: any = {
+							batch: batch.id,
+							order: index + 1,
+							image: img.file
+						};
 
-				try {
-					const result = await pb.collection('images').create(recordData);
-					console.log('Upload result:', result);
-				} catch (err: any) {
-					console.error('Upload error details:', {
-						message: err.message,
-						status: err.status,
-						data: err.data,
-						response: err.response
-					});
-					console.error('Detailed data object:', JSON.stringify(err.data, null, 2));
-					throw err;
-				}
-
-				// Update progress
-				uploadProgress = { current: index + 1, total: selectedImages.length };
+						try {
+							await pb.collection('images').create(recordData, {
+								$autoCancel: false // CRITICAL: Disable auto-cancel for parallel requests
+							});
+							completedCount++;
+							uploadProgress = { current: completedCount, total: selectedImages.length };
+						} catch (err: any) {
+							console.error('Upload error details:', {
+								message: err.message,
+								status: err.status,
+								data: err.data,
+								response: err.response
+							});
+							throw err;
+						}
+					})
+				);
 			}
 
 			// Step 3: Add batch to background processing queue
@@ -209,27 +208,40 @@
 
 			const createdBatchIds: string[] = [];
 
-			// Create separate batch for each file
-			for (let i = 0; i < selectedImages.length; i++) {
-				const img = selectedImages[i];
+			// Process files in parallel chunks for better performance
+			const CHUNK_SIZE = 3;
+			let completedCount = 0;
 
-				// Create batch
-				const batch = await pb.collection('image_batches').create({
-					project: projectId,
-					status: 'pending'
-				});
+			for (let i = 0; i < selectedImages.length; i += CHUNK_SIZE) {
+				const chunk = selectedImages.slice(i, i + CHUNK_SIZE);
 
-				createdBatchIds.push(batch.id);
+				const chunkBatchIds = await Promise.all(
+					chunk.map(async (img) => {
+						// Create batch
+						const batch = await pb.collection('image_batches').create({
+							project: projectId,
+							status: 'pending'
+						}, {
+							$autoCancel: false
+						});
 
-				// Upload single image to batch
-				await pb.collection('images').create({
-					batch: batch.id,
-					order: 1,
-					image: img.file
-				});
+						// Upload single image to batch
+						await pb.collection('images').create({
+							batch: batch.id,
+							order: 1,
+							image: img.file
+						}, {
+							$autoCancel: false
+						});
 
-				// Update progress
-				uploadProgress = { current: i + 1, total: selectedImages.length };
+						completedCount++;
+						uploadProgress = { current: completedCount, total: selectedImages.length };
+
+						return batch.id;
+					})
+				);
+
+				createdBatchIds.push(...chunkBatchIds);
 			}
 
 			// Enqueue all batches at once

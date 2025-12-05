@@ -36,6 +36,7 @@
 		"embla-carousel-svelte": "^8.6.0",
 		"eslint": "^9.38.0",
 		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-storybook": "^10.1.4",
 		"eslint-plugin-svelte": "^3.12.5",
 		"formsnap": "^2.0.1",
 		"globals": "^16.4.0",

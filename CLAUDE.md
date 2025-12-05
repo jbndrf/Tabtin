@@ -1,0 +1,1 @@
+- genral rule: if you can turn two processes into one prcess to reduce code, do it. make sure you remove code that becomes redundant after merging processes.

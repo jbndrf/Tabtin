@@ -3,6 +3,76 @@
 /// <reference path="../pb_data/types.d.ts" />
 
 /**
+ * Configure PocketBase settings from environment variables on startup.
+ * This ensures batch API and other settings are applied consistently.
+ *
+ * Environment variables:
+ *   PB_BATCH_ENABLED=true|false    - Enable/disable batch API
+ *   PB_BATCH_MAX_REQUESTS=100      - Max operations per batch request
+ *   PB_BATCH_TIMEOUT=30            - Timeout in seconds
+ *   PB_BATCH_MAX_BODY_SIZE=134217728 - Max body size in bytes (128MB)
+ */
+onBootstrap((e) => {
+  // Must call e.next() first before accessing database/settings
+  e.next();
+
+  const settings = $app.settings();
+  let hasChanges = false;
+
+  // Configure Batch API settings from environment variables
+  const batchEnabled = $os.getenv("PB_BATCH_ENABLED");
+  const batchMaxRequests = $os.getenv("PB_BATCH_MAX_REQUESTS");
+  const batchTimeout = $os.getenv("PB_BATCH_TIMEOUT");
+  const batchMaxBodySize = $os.getenv("PB_BATCH_MAX_BODY_SIZE");
+
+  if (batchEnabled !== "") {
+    const enabled = batchEnabled === "true" || batchEnabled === "1";
+    if (settings.batch.enabled !== enabled) {
+      settings.batch.enabled = enabled;
+      hasChanges = true;
+      console.log(`[Config] Batch API enabled: ${enabled}`);
+    }
+  }
+
+  if (batchMaxRequests !== "") {
+    const maxRequests = parseInt(batchMaxRequests, 10);
+    if (!isNaN(maxRequests) && maxRequests > 0 && settings.batch.maxRequests !== maxRequests) {
+      settings.batch.maxRequests = maxRequests;
+      hasChanges = true;
+      console.log(`[Config] Batch max requests: ${maxRequests}`);
+    }
+  }
+
+  if (batchTimeout !== "") {
+    const timeout = parseInt(batchTimeout, 10);
+    if (!isNaN(timeout) && timeout > 0 && settings.batch.timeout !== timeout) {
+      settings.batch.timeout = timeout;
+      hasChanges = true;
+      console.log(`[Config] Batch timeout: ${timeout}s`);
+    }
+  }
+
+  if (batchMaxBodySize !== "") {
+    const maxBodySize = parseInt(batchMaxBodySize, 10);
+    if (!isNaN(maxBodySize) && maxBodySize > 0 && settings.batch.maxBodySize !== maxBodySize) {
+      settings.batch.maxBodySize = maxBodySize;
+      hasChanges = true;
+      console.log(`[Config] Batch max body size: ${maxBodySize} bytes`);
+    }
+  }
+
+  // Save settings if any changes were made
+  if (hasChanges) {
+    try {
+      $app.save(settings);
+      console.log("[Config] Batch API settings saved successfully");
+    } catch (err) {
+      console.error("[Config] Failed to save batch settings:", err);
+    }
+  }
+});
+
+/**
  * Demo route implemented in JS. Says hello to the user's name or email.
  */
 routerAdd(

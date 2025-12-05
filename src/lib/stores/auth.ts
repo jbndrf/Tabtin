@@ -4,6 +4,9 @@ import { POCKETBASE_URL } from '$lib/config/pocketbase';
 
 export const pb = new PocketBase(POCKETBASE_URL);
 
+// Disable auto-cancellation to prevent bulk operations from cancelling each other
+pb.autoCancellation(false);
+
 export const currentUser = writable(pb.authStore.model);
 
 // Function to save auth to cookies

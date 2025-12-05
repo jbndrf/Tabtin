@@ -163,6 +163,12 @@
 
 	async function loadProjectData(projectId: string) {
 		try {
+			// Clear extraction rows cache when reloading project data
+			batchExtractionRows.clear();
+			batchExtractionRows = new Map();
+			expandedBatches.clear();
+			expandedBatches = new Set();
+
 			// Load project data from store (force reload when projectId changes)
 			await projectData.loadProject(projectId, $currentUser?.id || '', true);
 
@@ -188,6 +194,28 @@
 		if (projectId && $currentUser?.id) {
 			loadProjectData(projectId);
 		}
+	});
+
+	// Clear extraction rows cache when batches change (after reprocessing, etc.)
+	$effect(() => {
+		// Watch for changes to the batches array
+		const batches = $projectBatches;
+
+		// Clear cache for any batches that no longer exist or have changed status to pending
+		const currentBatchIds = new Set(batches.map(b => b.id));
+		const pendingBatchIds = new Set(batches.filter(b => b.status === 'pending').map(b => b.id));
+
+		// Remove cached data for batches that are now pending (being reprocessed)
+		for (const batchId of batchExtractionRows.keys()) {
+			if (!currentBatchIds.has(batchId) || pendingBatchIds.has(batchId)) {
+				batchExtractionRows.delete(batchId);
+				expandedBatches.delete(batchId);
+			}
+		}
+
+		// Trigger reactivity
+		batchExtractionRows = new Map(batchExtractionRows);
+		expandedBatches = new Set(expandedBatches);
 	});
 
 	async function cancelProcessing() {
