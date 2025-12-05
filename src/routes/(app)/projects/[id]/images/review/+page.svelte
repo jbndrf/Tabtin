@@ -874,33 +874,26 @@
 		if (!row) return;
 
 		try {
-			const now = new Date().toISOString();
 			const batch = getCurrentBatch();
 			if (!batch) return;
 
-			// For multi-row batches, approve ALL remaining rows at once using batch API
-			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
-				filter: `batch = '${batch.id}' && status = 'review'`
+			// Use our status API to approve the batch (handles all extraction_rows)
+			const response = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: [batch.id],
+					targetStatus: 'approved',
+					projectId: data.projectId
+				})
 			});
 
-			if (allRemainingRows.length > 0) {
-				// Use batch API for atomic transaction
-				const updateBatch = pb.createBatch();
-				for (const r of allRemainingRows) {
-					updateBatch.collection('extraction_rows').update(r.id, {
-						status: 'approved',
-						approved_at: now
-					});
-				}
-				await updateBatch.send();
-
-				toast.success(t('images.review.toast.accepted') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
+			if (!response.ok) {
+				const result = await response.json();
+				throw new Error(result.error || 'Failed to approve batch');
 			}
 
-			// All rows approved, update batch status
-			await pb.collection('image_batches').update(batch.id, {
-				status: 'approved'
-			});
+			toast.success(t('images.review.toast.accepted'));
 
 			// Move to next batch
 			moveToNextBatch();
@@ -917,38 +910,26 @@
 		if (!row) return;
 
 		try {
-			const now = new Date().toISOString();
 			const batch = getCurrentBatch();
 			if (!batch) return;
 
-			// For multi-row batches, decline ALL remaining rows at once using batch API
-			const allRemainingRows = await pb.collection('extraction_rows').getFullList({
-				filter: `batch = '${batch.id}' && status = 'review'`
+			// Use our status API to set batch to failed (deletes all extraction_rows)
+			const response = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: [batch.id],
+					targetStatus: 'failed',
+					projectId: data.projectId
+				})
 			});
 
-			if (allRemainingRows.length > 0) {
-				// Use batch API for atomic transaction
-				const updateBatch = pb.createBatch();
-				for (const r of allRemainingRows) {
-					updateBatch.collection('extraction_rows').update(r.id, {
-						status: 'deleted',
-						deleted_at: now
-					});
-				}
-				await updateBatch.send();
-
-				toast.success(t('images.review.toast.declined') + ` (${allRemainingRows.length} row${allRemainingRows.length > 1 ? 's' : ''})`);
+			if (!response.ok) {
+				const result = await response.json();
+				throw new Error(result.error || 'Failed to decline batch');
 			}
 
-			// Check if any rows were approved before declining (use getList for count only)
-			const approvedResult = await pb.collection('extraction_rows').getList(1, 1, {
-				filter: `batch = '${batch.id}' && status = 'approved'`
-			});
-
-			// Update batch status based on whether any rows were approved
-			await pb.collection('image_batches').update(batch.id, {
-				status: approvedResult.totalItems > 0 ? 'approved' : 'failed'
-			});
+			toast.success(t('images.review.toast.declined'));
 
 			// Move to next batch
 			moveToNextBatch();

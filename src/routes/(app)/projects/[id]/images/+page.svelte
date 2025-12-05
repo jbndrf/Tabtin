@@ -492,54 +492,39 @@
 			return;
 		}
 
-		let successCount = 0;
-		let failCount = 0;
-		const now = new Date().toISOString();
-
 		toast.info(`Approving ${reviewBatches.length} batch${reviewBatches.length === 1 ? '' : 'es'}...`);
 
-		// Collect all batch IDs
-		const batchIds = reviewBatches.map((b) => b.id);
-		const batchFilter = batchIds.map((id) => `batch = '${id}'`).join(' || ');
-
 		try {
-			// First, get all extraction_rows for these batches that are in 'review' status
-			const allRows = await pb.collection('extraction_rows').getFullList({
-				filter: `(${batchFilter}) && status = 'review'`
+			const batchIds = reviewBatches.map((b) => b.id);
+
+			// Use our status API to approve all batches
+			const response = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds,
+					targetStatus: 'approved',
+					projectId: data.projectId
+				})
 			});
 
-			// Update all extraction_rows using batch API
-			if (allRows.length > 0) {
-				const updateBatch = pb.createBatch();
-				for (const row of allRows) {
-					updateBatch.collection('extraction_rows').update(row.id, {
-						status: 'approved',
-						approved_at: now
-					});
-				}
-				await updateBatch.send();
+			const result = await response.json();
+
+			if (!response.ok) {
+				throw new Error(result.error || 'Failed to approve batches');
 			}
 
-			// Then update all batch statuses
-			const batchUpdateBatch = pb.createBatch();
-			for (const batch of reviewBatches) {
-				batchUpdateBatch.collection('image_batches').update(batch.id, { status: 'approved' });
-			}
-			await batchUpdateBatch.send();
+			await loadAllBatchesWithImages();
+			await projectData.invalidate();
 
-			successCount = reviewBatches.length;
+			if (result.failCount > 0) {
+				toast.warning(`Approved ${result.successCount} batch(es), ${result.failCount} failed`);
+			} else {
+				toast.success(`Successfully approved ${result.successCount} batch${result.successCount === 1 ? '' : 'es'}!`);
+			}
 		} catch (error) {
 			console.error('Failed to approve batches:', error);
-			failCount = reviewBatches.length;
-		}
-
-		await loadAllBatchesWithImages();
-		await projectData.invalidate();
-
-		if (failCount === 0) {
-			toast.success(`Successfully approved ${successCount} batch${successCount === 1 ? '' : 'es'}!`);
-		} else {
-			toast.warning(`Approved ${successCount} batch${successCount === 1 ? '' : 'es'}, ${failCount} failed`);
+			toast.error(error instanceof Error ? error.message : 'Failed to approve batches');
 		}
 	}
 
