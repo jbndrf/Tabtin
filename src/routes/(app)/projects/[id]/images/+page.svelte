@@ -246,31 +246,44 @@
 	async function deleteSelectedBatches() {
 		if (selectedBatches.size === 0) return;
 
-		if (!confirm(`Delete ${selectedBatches.size} batch${selectedBatches.size === 1 ? '' : 'es'}? All images will be permanently deleted.`)) {
+		if (!confirm(`Delete ${selectedBatches.size} batch${selectedBatches.size === 1 ? '' : 'es'}? All images and extraction data will be permanently deleted.`)) {
 			return;
 		}
 
-		let successCount = 0;
-		let failCount = 0;
+		isProcessing = true;
 
-		for (const batchId of selectedBatches) {
-			try {
-				await pb.collection('image_batches').delete(batchId);
-				successCount++;
-			} catch (error) {
-				console.error(`Failed to delete batch ${batchId}:`, error);
-				failCount++;
+		try {
+			const batchIds = Array.from(selectedBatches);
+
+			const response = await fetch('/api/batches/delete', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds,
+					projectId: data.projectId
+				})
+			});
+
+			const result = await response.json();
+
+			if (!response.ok) {
+				throw new Error(result.error || 'Failed to delete batches');
 			}
-		}
 
-		await loadAllBatchesWithImages();
-		await projectData.invalidate();
-		exitSelectionMode();
+			await loadAllBatchesWithImages();
+			await projectData.invalidate();
+			exitSelectionMode();
 
-		if (failCount === 0) {
-			toast.success(`Deleted ${successCount} batch${successCount === 1 ? '' : 'es'}`);
-		} else {
-			toast.warning(`Deleted ${successCount} batch${successCount === 1 ? '' : 'es'}, ${failCount} failed`);
+			if (result.failCount > 0) {
+				toast.warning(`Deleted ${result.successCount} batch(es), ${result.failCount} failed`);
+			} else {
+				toast.success(`Deleted ${result.successCount} batch${result.successCount === 1 ? '' : 'es'}`);
+			}
+		} catch (error) {
+			console.error('Failed to delete batches:', error);
+			toast.error(error instanceof Error ? error.message : 'Failed to delete batches');
+		} finally {
+			isProcessing = false;
 		}
 	}
 

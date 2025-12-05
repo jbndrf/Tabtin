@@ -94,17 +94,30 @@
 	}
 
 	async function deleteBatch() {
-		if (!batch || !confirm('Delete this batch? All images will be permanently deleted.')) {
+		if (!batch || !confirm('Delete this batch? All images and extraction data will be permanently deleted.')) {
 			return;
 		}
 
 		try {
-			await pb.collection('image_batches').delete(batch.id);
+			const response = await fetch('/api/batches/delete', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: [batch.id],
+					projectId: data.projectId
+				})
+			});
+
+			if (!response.ok) {
+				const result = await response.json();
+				throw new Error(result.error || 'Failed to delete batch');
+			}
+
 			toast.success('Batch deleted');
 			goto(`/projects/${data.projectId}/images`);
 		} catch (error) {
 			console.error('Failed to delete batch:', error);
-			toast.error('Failed to delete batch');
+			toast.error(error instanceof Error ? error.message : 'Failed to delete batch');
 		}
 	}
 
