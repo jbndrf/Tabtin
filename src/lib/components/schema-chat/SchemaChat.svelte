@@ -39,6 +39,14 @@
 		name?: string;
 	}
 
+	interface PdfSettings {
+		dpi: number;
+		format: 'png' | 'jpeg';
+		quality: number;
+		maxWidth: number;
+		maxHeight: number;
+	}
+
 	interface Props {
 		open: boolean;
 		projectId: string;
@@ -51,6 +59,7 @@
 		hasExistingData?: boolean;
 		chatHistory?: DisplayMessage[];
 		documentAnalyses?: DocumentAnalysis[];
+		pdfSettings?: PdfSettings;
 		onColumnsChange: (columns: Column[]) => void;
 		onDescriptionChange?: (description: string) => void;
 		onMultiRowChange?: (enabled: boolean) => void;
@@ -71,6 +80,7 @@
 		hasExistingData = false,
 		chatHistory = [],
 		documentAnalyses = [],
+		pdfSettings,
 		onColumnsChange,
 		onDescriptionChange,
 		onMultiRowChange,
@@ -473,9 +483,9 @@
 
 			for (const file of files) {
 				if (isPdfFile(file)) {
-					// Convert PDF to images
+					// Convert PDF to images using project settings
 					toast.info(`Converting ${file.name} to images...`);
-					const converted = await convertPdfToImages(file);
+					const converted = await convertPdfToImages(file, pdfSettings);
 					imageFiles.push(...converted);
 				} else if (file.type.startsWith('image/')) {
 					imageFiles.push(file);

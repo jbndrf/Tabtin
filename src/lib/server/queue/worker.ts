@@ -253,30 +253,40 @@ export class QueueWorker {
 			});
 
 			// Call LLM API using connection pool
+			// Use AbortController with configurable timeout (default 10 minutes)
+			const timeoutMinutes = settings.requestTimeout ?? 10;
 			const result = await this.connectionPool.execute(async () => {
-				const response = await fetch(settings.endpoint, {
-					method: 'POST',
-					headers: {
-						Authorization: `Bearer ${settings.apiKey}`,
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({
-						model: settings.modelName,
-						messages: [
-							{
-								role: 'user',
-								content: contentArray
-							}
-						]
-					})
-				});
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
 
-				if (!response.ok) {
-					const errorBody = await response.text();
-					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
+				try {
+					const response = await fetch(settings.endpoint, {
+						method: 'POST',
+						headers: {
+							Authorization: `Bearer ${settings.apiKey}`,
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({
+							model: settings.modelName,
+							messages: [
+								{
+									role: 'user',
+									content: contentArray
+								}
+							]
+						}),
+						signal: controller.signal
+					});
+
+					if (!response.ok) {
+						const errorBody = await response.text();
+						throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
+					}
+
+					return response.json();
+				} finally {
+					clearTimeout(timeoutId);
 				}
-
-				return response.json();
 			});
 
 			// Parse response
@@ -510,36 +520,46 @@ export class QueueWorker {
 			);
 
 			// Call LLM API
+			// Use AbortController with configurable timeout (default 10 minutes)
+			const timeoutMinutes = settings.requestTimeout ?? 10;
 			const result = await this.connectionPool.execute(async () => {
-				const response = await fetch(settings.endpoint, {
-					method: 'POST',
-					headers: {
-						Authorization: `Bearer ${settings.apiKey}`,
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({
-						model: settings.modelName,
-						messages: [
-							{
-								role: 'user',
-								content: [
-									{ type: 'text', text: prompt },
-									...croppedImages.map((url) => ({
-										type: 'image_url',
-										image_url: { url }
-									}))
-								]
-							}
-						]
-					})
-				});
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
 
-				if (!response.ok) {
-					const errorBody = await response.text();
-					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
+				try {
+					const response = await fetch(settings.endpoint, {
+						method: 'POST',
+						headers: {
+							Authorization: `Bearer ${settings.apiKey}`,
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({
+							model: settings.modelName,
+							messages: [
+								{
+									role: 'user',
+									content: [
+										{ type: 'text', text: prompt },
+										...croppedImages.map((url) => ({
+											type: 'image_url',
+											image_url: { url }
+										}))
+									]
+								}
+							]
+						}),
+						signal: controller.signal
+					});
+
+					if (!response.ok) {
+						const errorBody = await response.text();
+						throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
+					}
+
+					return response.json();
+				} finally {
+					clearTimeout(timeoutId);
 				}
-
-				return response.json();
 			});
 
 			// Parse response

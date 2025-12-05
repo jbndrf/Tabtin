@@ -3,16 +3,35 @@
  * Uses server-side PDF conversion API
  */
 
+export interface PdfConversionOptions {
+	/** DPI for rendering (default: 600) */
+	dpi?: number;
+	/** Output format (default: 'png') */
+	format?: 'png' | 'jpeg';
+	/** JPEG quality 0-100 (default: 100) */
+	quality?: number;
+	/** Maximum width in pixels (default: 7100) */
+	maxWidth?: number;
+	/** Maximum height in pixels (default: 7100) */
+	maxHeight?: number;
+}
+
 /**
  * Convert a PDF file to multiple image files using the server-side API
  *
  * @param file - The PDF file to convert
+ * @param options - PDF conversion options (DPI, format, etc.)
  * @returns Array of converted image files (one per PDF page)
  * @throws Error if conversion fails
  */
-export async function convertPdfToImages(file: File): Promise<File[]> {
+export async function convertPdfToImages(file: File, options?: PdfConversionOptions): Promise<File[]> {
 	const formData = new FormData();
 	formData.append('pdf', file);
+
+	// Append options as JSON if provided
+	if (options) {
+		formData.append('options', JSON.stringify(options));
+	}
 
 	const response = await fetch('/api/pdf/convert', {
 		method: 'POST',

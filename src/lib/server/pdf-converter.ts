@@ -105,7 +105,7 @@ export async function convertPdfToImages(
 		const pdf = await loadingTask.promise;
 		const totalPages = pdf.numPages;
 
-		console.log(`Converting PDF: ${fileName} (${totalPages} pages) at 600 DPI`);
+		console.log(`Converting PDF: ${fileName} (${totalPages} pages) at ${Math.round(scale * 72)} DPI`);
 
 		const convertedPages: ConvertedPage[] = [];
 

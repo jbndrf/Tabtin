@@ -96,6 +96,12 @@
 	let pdfMaxWidth = $state<number>(PDF_DEFAULTS.maxWidth);
 	let pdfMaxHeight = $state<number>(PDF_DEFAULTS.maxHeight);
 
+	// API Request settings (Advanced)
+	const API_DEFAULTS = {
+		requestTimeout: 10 // minutes
+	};
+	let requestTimeout = $state<number>(API_DEFAULTS.requestTimeout);
+
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
 		pdfFormat = PDF_DEFAULTS.format;
@@ -185,6 +191,9 @@
 			pdfQuality = settings.pdfQuality ?? PDF_DEFAULTS.quality;
 			pdfMaxWidth = settings.pdfMaxWidth ?? PDF_DEFAULTS.maxWidth;
 			pdfMaxHeight = settings.pdfMaxHeight ?? PDF_DEFAULTS.maxHeight;
+
+			// Load API request settings
+			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -348,6 +357,8 @@
 				pdfQuality,
 				pdfMaxWidth,
 				pdfMaxHeight,
+				// API request settings
+				requestTimeout,
 				columns: columns.map((col, index) => ({
 					id: String(index + 1),
 					name: col.name,
@@ -1130,6 +1141,71 @@
 						</div>
 					</Card.Content>
 				</Card.Root>
+
+				<Separator class="my-6" />
+
+				<!-- API Request Settings -->
+				<div class="space-y-4">
+					<div class="flex items-start justify-between">
+						<div>
+							<h2 class="text-xl font-semibold">API Request Settings</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure timeouts for LLM API requests. Larger documents may need longer timeouts.
+							</p>
+						</div>
+						<Button variant="outline" size="sm" onclick={() => requestTimeout = API_DEFAULTS.requestTimeout}>
+							Reset to Default
+						</Button>
+					</div>
+
+					<div class="space-y-2">
+						<div class="flex items-center gap-2">
+							<Label for="requestTimeout">Request Timeout (minutes)</Label>
+							<Tooltip.Root>
+								<Tooltip.Trigger>
+									{#snippet child({ props })}
+										<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+											<HelpCircle class="h-4 w-4" />
+										</button>
+									{/snippet}
+								</Tooltip.Trigger>
+								<Tooltip.Content>
+									<div class="max-w-xs space-y-1">
+										<p class="font-medium">API Request Timeout</p>
+										<p class="text-xs">Maximum time to wait for LLM API responses. Increase this for large multi-page documents or slow models.</p>
+										<p class="text-xs mt-2">Recommended values:</p>
+										<ul class="text-xs list-disc pl-4">
+											<li>5 min: Fast models, small documents</li>
+											<li>10 min: Default, most use cases</li>
+											<li>15-20 min: Large PDFs, slow models</li>
+										</ul>
+									</div>
+								</Tooltip.Content>
+							</Tooltip.Root>
+						</div>
+						<div class="flex gap-4 items-center">
+							<Input
+								type="number"
+								id="requestTimeout"
+								bind:value={requestTimeout}
+								min="1"
+								max="30"
+								step="1"
+								class="h-12 w-32"
+							/>
+							<div class="flex gap-2">
+								<Button variant="outline" size="sm" onclick={() => requestTimeout = 5}>5</Button>
+								<Button variant="outline" size="sm" onclick={() => requestTimeout = 10}>10</Button>
+								<Button variant="outline" size="sm" onclick={() => requestTimeout = 15}>15</Button>
+								<Button variant="outline" size="sm" onclick={() => requestTimeout = 20}>20</Button>
+							</div>
+							<span class="text-sm text-muted-foreground">minutes</span>
+						</div>
+						<p class="text-xs text-muted-foreground">
+							Current: {requestTimeout} minutes = {requestTimeout * 60} seconds
+						</p>
+					</div>
+				</div>
 			</div>
 		</Tabs.Content>
 	</Tabs.Root>
@@ -1413,6 +1489,7 @@
 		{multiRowExtraction}
 		chatHistory={schemaChatHistory}
 		{documentAnalyses}
+		pdfSettings={{ dpi: pdfDpi, format: pdfFormat, quality: pdfQuality, maxWidth: pdfMaxWidth, maxHeight: pdfMaxHeight }}
 		onColumnsChange={(newColumns) => {
 			columns = newColumns.map(col => ({ ...col, expanded: col.expanded ?? false }));
 		}}

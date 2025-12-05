@@ -1,11 +1,12 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { convertPdfToImages } from '$lib/server/pdf-converter';
+import { convertPdfToImages, type PdfConversionOptions } from '$lib/server/pdf-converter';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const formData = await request.formData();
 		const pdfFile = formData.get('pdf') as File;
+		const optionsJson = formData.get('options') as string | null;
 
 		if (!pdfFile) {
 			return json({ error: 'No PDF file provided' }, { status: 400 });
@@ -15,14 +16,32 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ error: 'File must be a PDF' }, { status: 400 });
 		}
 
+		// Parse conversion options if provided
+		let options: PdfConversionOptions = {};
+		if (optionsJson) {
+			try {
+				const parsed = JSON.parse(optionsJson);
+				options = {
+					scale: parsed.dpi ? parsed.dpi / 72 : undefined, // Convert DPI to scale factor
+					maxWidth: parsed.maxWidth,
+					maxHeight: parsed.maxHeight,
+					format: parsed.format,
+					quality: parsed.quality ? parsed.quality / 100 : undefined // Convert percentage to 0-1
+				};
+			} catch (e) {
+				console.warn('[PDF API] Failed to parse options, using defaults');
+			}
+		}
+
 		// Convert File to Buffer
 		const arrayBuffer = await pdfFile.arrayBuffer();
 		const buffer = Buffer.from(arrayBuffer);
 
-		console.log(`[PDF API] Converting ${pdfFile.name} (${Math.round(buffer.length / 1024)}KB)`);
+		const dpi = options.scale ? Math.round(options.scale * 72) : 600;
+		console.log(`[PDF API] Converting ${pdfFile.name} (${Math.round(buffer.length / 1024)}KB) at ${dpi} DPI`);
 
-		// Convert PDF to images
-		const convertedPages = await convertPdfToImages(buffer, pdfFile.name);
+		// Convert PDF to images with options
+		const convertedPages = await convertPdfToImages(buffer, pdfFile.name, options);
 
 		// Convert buffers to base64 for JSON transfer
 		const responsePages = convertedPages.map((page) => ({
