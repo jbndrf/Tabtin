@@ -17,6 +17,9 @@ export class QueueManager {
 	private pocketbaseUrl: string;
 	private adminEmail: string;
 	private adminPassword: string;
+	private pbInstance: PocketBase | null = null;
+	private pbAuthTime: number = 0;
+	private readonly AUTH_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
 	constructor(pocketbaseUrl: string, adminEmail: string, adminPassword: string) {
 		this.pocketbaseUrl = pocketbaseUrl;
@@ -25,10 +28,20 @@ export class QueueManager {
 	}
 
 	private async getPocketBase(): Promise<PocketBase> {
+		const now = Date.now();
+
+		// Reuse existing instance if auth is still valid
+		if (this.pbInstance && now - this.pbAuthTime < this.AUTH_TIMEOUT) {
+			return this.pbInstance;
+		}
+
+		// Create new instance and authenticate
 		const pb = new PocketBase(this.pocketbaseUrl);
 		pb.autoCancellation(false); // Disable auto-cancellation
 		try {
 			await pb.collection('_superusers').authWithPassword(this.adminEmail, this.adminPassword);
+			this.pbInstance = pb;
+			this.pbAuthTime = now;
 		} catch (error) {
 			console.error('Queue manager authentication failed:', error);
 			throw error;
@@ -74,13 +87,34 @@ export class QueueManager {
 		projectId: string,
 		priority: number = 10
 	): Promise<QueueJob[]> {
-		const jobs: Promise<QueueJob>[] = [];
+		// Process sequentially using a single connection to avoid connection saturation
+		// This prevents silent failures when background processing is active
+		const pb = await this.getPocketBase();
+		const jobs: QueueJob[] = [];
 
 		for (const batchId of batchIds) {
-			jobs.push(this.enqueueBatch(batchId, projectId, priority));
+			const job = {
+				type: 'process_batch' as JobType,
+				status: 'queued',
+				data: { batchId, projectId },
+				priority: Number(priority),
+				attempts: 0,
+				maxAttempts: 3,
+				projectId
+			};
+
+			try {
+				const record = await pb.collection(QUEUE_COLLECTION).create(job);
+				jobs.push(this.mapRecordToJob(record));
+			} catch (error: any) {
+				console.error(`Failed to enqueue batch ${batchId}:`, {
+					errorData: JSON.stringify(error.response?.data || error, null, 2)
+				});
+				throw error;
+			}
 		}
 
-		return Promise.all(jobs);
+		return jobs;
 	}
 
 	async getNextJob(): Promise<QueueJob | null> {

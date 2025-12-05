@@ -161,7 +161,7 @@
 			}
 
 			// Step 3: Add batch to background processing queue
-			await fetch('/api/queue/enqueue', {
+			const enqueueResponse = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -170,6 +170,20 @@
 					priority: 10
 				})
 			});
+
+			if (!enqueueResponse.ok) {
+				const errorData = await enqueueResponse.json().catch(() => ({}));
+				console.error('Failed to enqueue batch:', errorData);
+				toast.error('Failed to queue batch for processing. Please try again.');
+				return;
+			}
+
+			const enqueueResult = await enqueueResponse.json();
+			if (!enqueueResult.success) {
+				console.error('Enqueue failed:', enqueueResult.error);
+				toast.error(enqueueResult.error || 'Failed to queue batch');
+				return;
+			}
 
 			// Step 4: Clear the gallery view
 			clearAll();
@@ -219,7 +233,7 @@
 			}
 
 			// Enqueue all batches at once
-			await fetch('/api/queue/enqueue', {
+			const enqueueResponse = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -228,6 +242,20 @@
 					priority: 10
 				})
 			});
+
+			if (!enqueueResponse.ok) {
+				const errorData = await enqueueResponse.json().catch(() => ({}));
+				console.error('Failed to enqueue batches:', errorData);
+				toast.error('Failed to queue batches for processing. Please try again.');
+				return;
+			}
+
+			const enqueueResult = await enqueueResponse.json();
+			if (!enqueueResult.success) {
+				console.error('Enqueue failed:', enqueueResult.error);
+				toast.error(enqueueResult.error || 'Failed to queue batches');
+				return;
+			}
 
 			// Clear and navigate
 			clearAll();

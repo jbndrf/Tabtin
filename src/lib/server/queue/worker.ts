@@ -409,10 +409,23 @@ export class QueueWorker {
 		const { batchIds, projectId } = job.data as any;
 
 		for (const batchId of batchIds) {
-			// Reset batch to pending
+			// Delete all existing extraction_rows for this batch (even if approved)
+			const existingRows = await this.pb.collection('extraction_rows').getFullList({
+				filter: `batch = "${batchId}"`
+			});
+
+			for (const row of existingRows) {
+				await this.pb.collection('extraction_rows').delete(row.id);
+			}
+
+			// Reset batch to pending and clear all processing-related data
 			await this.pb.collection('image_batches').update(batchId, {
 				status: 'pending',
-				processed_data: null
+				processed_data: null,
+				row_count: null,
+				processing_completed: null,
+				error_message: null,
+				redo_processed_at: null
 			});
 
 			// Enqueue for processing
