@@ -18,12 +18,13 @@ export const APPROVAL_REQUIRED_TOOLS = [
 	'add_column',
 	'edit_column',
 	'remove_column',
-	'update_project_description'
+	'update_project_description',
+	'set_multi_row_mode'
 ] as const;
 
 export const SPECIAL_UI_TOOLS = ['ask_questions', 'request_example_image'] as const;
 
-export const AUTO_EXECUTE_TOOLS = ['get_current_schema'] as const;
+export const AUTO_EXECUTE_TOOLS = ['get_current_schema', 'get_project_settings', 'analyze_document'] as const;
 
 export type ApprovalRequiredTool = (typeof APPROVAL_REQUIRED_TOOLS)[number];
 export type SpecialUITool = (typeof SPECIAL_UI_TOOLS)[number];
@@ -231,6 +232,68 @@ export const SCHEMA_CHAT_TOOLS: ToolDefinition[] = [
 				required: []
 			}
 		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'get_project_settings',
+			description:
+				'Get current project settings including multi-row extraction mode. This executes immediately without approval.',
+			parameters: {
+				type: 'object',
+				properties: {},
+				required: []
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'set_multi_row_mode',
+			description:
+				'Enable or disable multi-row extraction mode. Use this when the user wants to extract multiple rows/items from each image (like line items from an invoice, transactions from a bank statement). Single-row mode (default) is for documents with one item per image.',
+			parameters: {
+				type: 'object',
+				properties: {
+					enabled: {
+						type: 'boolean',
+						description: 'true to enable multi-row extraction, false for single-row mode'
+					},
+					reason: {
+						type: 'string',
+						description: 'Brief explanation of why this mode is appropriate for the user\'s use case'
+					}
+				},
+				required: ['enabled', 'reason']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'analyze_document',
+			description:
+				'Store a summary of the document(s) the user has shared for future reference. Call this AFTER the user provides example images to create a persistent memory of what you observed. This helps maintain context about the document structure throughout the conversation.',
+			parameters: {
+				type: 'object',
+				properties: {
+					summary: {
+						type: 'string',
+						description: 'Detailed description of the document(s): layout, sections, data fields observed, formatting patterns'
+					},
+					documentType: {
+						type: 'string',
+						description: 'Type of document (e.g., "invoice", "receipt", "bank statement", "form")'
+					},
+					identifiedFields: {
+						type: 'array',
+						description: 'List of data fields/values you identified in the document',
+						items: { type: 'string' }
+					}
+				},
+				required: ['summary', 'documentType', 'identifiedFields']
+			}
+		}
 	}
 ];
 
@@ -286,6 +349,17 @@ export interface RemoveColumnArgs {
 
 export interface UpdateProjectDescriptionArgs {
 	description: string;
+}
+
+export interface SetMultiRowModeArgs {
+	enabled: boolean;
+	reason: string;
+}
+
+export interface AnalyzeDocumentArgs {
+	summary: string;
+	documentType: string;
+	identifiedFields: string[];
 }
 
 // Helper to check tool category

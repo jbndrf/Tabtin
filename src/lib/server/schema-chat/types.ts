@@ -13,6 +13,16 @@ export type ChatState =
 	| 'executing' // Executing approved tools
 	| 'auto_continuing'; // Sending results back to AI
 
+// Tool call structure from LLM response
+export interface ToolCall {
+	id: string;
+	type: 'function';
+	function: {
+		name: string;
+		arguments: string;
+	};
+}
+
 // Enhanced tool call with status tracking
 export interface PendingToolCall {
 	id: string;
@@ -27,6 +37,16 @@ export interface PendingToolCall {
 		message: string;
 		data?: unknown;
 	};
+}
+
+// Document analysis stored for image memory
+export interface DocumentAnalysis {
+	id: string;
+	timestamp: number;
+	summary: string;
+	documentType?: string;
+	identifiedFields?: string[];
+	imageCount: number;
 }
 
 // Question option for ask_questions tool
@@ -71,19 +91,16 @@ export interface Column {
 	expanded?: boolean;
 }
 
-// Chat message structure
+// Chat message structure - supports OpenAI format with proper tool history
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'system' | 'tool';
-	content: string;
-	tool_calls?: Array<{
-		id: string;
-		type: 'function';
-		function: {
-			name: string;
-			arguments: string;
-		};
-	}>;
+	// Content can be string or multimodal array (for images)
+	content: string | Array<{ type: string; text?: string; image_url?: { url: string; detail?: string } }> | null;
+	// Tool calls made by assistant
+	tool_calls?: ToolCall[];
+	// For tool response messages
 	tool_call_id?: string;
+	name?: string; // Tool name for tool responses
 }
 
 // Tool execution result
@@ -108,6 +125,9 @@ export interface ChatModeRequest {
 	currentColumns: Column[];
 	projectDescription?: string;
 	projectId: string;
+	multiRowExtraction?: boolean;
+	// Stored document analyses for image memory
+	documentAnalyses?: DocumentAnalysis[];
 }
 
 // API request for execute mode
@@ -131,22 +151,22 @@ export type SchemaChatRequest = ChatModeRequest | ExecuteModeRequest;
 
 // Chat mode response
 export interface ChatModeResponse {
-	message: {
-		role: 'assistant';
-		content: string;
-		tool_calls?: Array<{
-			id: string;
-			type: 'function';
-			function: {
-				name: string;
-				arguments: string;
-			};
-		}>;
-	};
+	// The assistant message to add to history (preserves tool_calls)
+	message: ChatMessage;
+	// Tool response messages to add to history (for auto-executed tools)
+	toolMessages?: ChatMessage[];
+	// Pending tools requiring user approval
 	pendingTools?: PendingToolCall[];
+	// Questions for user
 	questions?: Question[];
+	// Image request
 	imageRequest?: ImageRequest;
+	// Results from auto-executed tools
 	autoExecuteResults?: ToolResult[];
+	// New document analysis if images were analyzed
+	documentAnalysis?: DocumentAnalysis;
+	// Whether there are more tool calls to process (agent loop should continue)
+	shouldContinue?: boolean;
 }
 
 // Execute mode response
@@ -154,4 +174,7 @@ export interface ExecuteModeResponse {
 	results: ToolResult[];
 	updatedColumns?: Column[];
 	updatedDescription?: string;
+	updatedMultiRowExtraction?: boolean;
+	// Tool response messages to add to history
+	toolMessages?: ChatMessage[];
 }

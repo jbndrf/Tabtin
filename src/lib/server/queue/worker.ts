@@ -4,7 +4,7 @@ import PocketBase from 'pocketbase';
 import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
-import { convertPdfToImages, isPdfFile } from '../pdf-converter';
+import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
 import { buildPromptTemplate, MULTI_ROW_ADDON } from '$lib/prompt-presets';
 
 export class QueueWorker {
@@ -178,6 +178,15 @@ export class QueueWorker {
 			// Handle PDFs by converting them to images first
 			const imageData: Array<{ dataUrl: string; extractedText: string | null }> = [];
 
+			// Build PDF conversion options from project settings
+			const pdfOptions: PdfConversionOptions = {
+				scale: (settings.pdfDpi ?? 600) / 72, // Convert DPI to scale factor
+				maxWidth: settings.pdfMaxWidth ?? 7100,
+				maxHeight: settings.pdfMaxHeight ?? 7100,
+				format: settings.pdfFormat ?? 'png',
+				quality: (settings.pdfQuality ?? 100) / 100 // Convert percentage to 0-1 range
+			};
+
 			for (const img of images) {
 				const url = this.pb.files.getURL(img, img.image);
 				const response = await fetch(url);
@@ -185,14 +194,14 @@ export class QueueWorker {
 
 				// Check if this is a PDF file
 				if (isPdfFile(img.image)) {
-					console.log(`Converting PDF to images: ${img.image}`);
+					console.log(`Converting PDF to images: ${img.image} (DPI: ${settings.pdfDpi ?? 600}, Format: ${pdfOptions.format})`);
 
 					// Convert blob to buffer
 					const arrayBuffer = await blob.arrayBuffer();
 					const buffer = Buffer.from(arrayBuffer);
 
-					// Convert PDF to images at 600 DPI
-					const convertedPages = await convertPdfToImages(buffer, img.image);
+					// Convert PDF to images using project settings
+					const convertedPages = await convertPdfToImages(buffer, img.image, pdfOptions);
 
 					// Add each page as a separate image
 					for (const page of convertedPages) {

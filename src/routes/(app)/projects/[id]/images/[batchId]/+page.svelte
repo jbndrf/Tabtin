@@ -2,9 +2,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import * as Badge from '$lib/components/ui/badge';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import BatchDataViewer from '$lib/components/projects/batch-data-viewer.svelte';
 	import { t } from '$lib/i18n';
-	import { ArrowLeft, Play, Eye, Trash2, Image as ImageIcon } from 'lucide-svelte';
+	import { ArrowLeft, Play, Eye, Trash2, Image as ImageIcon, RefreshCcw, ChevronDown } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import type { ImageBatchesResponse, ImagesResponse } from '$lib/pocketbase-types';
@@ -49,7 +50,22 @@
 			isProcessing = true;
 			toast.info('Processing batch...');
 
-			// Enqueue batch via backend queue
+			// First, reset to pending (this deletes extraction_rows via the status API)
+			const statusResponse = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: [batch.id],
+					targetStatus: 'pending',
+					projectId: data.projectId
+				})
+			});
+
+			if (!statusResponse.ok) {
+				throw new Error('Failed to reset batch status');
+			}
+
+			// Then enqueue for processing
 			const response = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -111,6 +127,43 @@
 
 	function getBatchStatusLabel(status: string) {
 		return t(`images.gallery.status.${status}`);
+	}
+
+	async function changeBatchStatus(targetStatus: 'pending' | 'review' | 'approved' | 'failed') {
+		if (!batch) return;
+
+		const isDestructive = targetStatus === 'pending' || targetStatus === 'failed';
+		if (isDestructive && !confirm('This will delete all extraction data for this batch. Continue?')) {
+			return;
+		}
+
+		isProcessing = true;
+
+		try {
+			const response = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: [batch.id],
+					targetStatus,
+					projectId: data.projectId
+				})
+			});
+
+			const result = await response.json();
+
+			if (!response.ok) {
+				throw new Error(result.error || 'Failed to change status');
+			}
+
+			toast.success(`Batch status changed to ${targetStatus}`);
+			await loadBatch();
+		} catch (error) {
+			console.error('Failed to change status:', error);
+			toast.error(error instanceof Error ? error.message : 'Failed to change batch status');
+		} finally {
+			isProcessing = false;
+		}
 	}
 </script>
 
@@ -215,6 +268,49 @@
 								{t('images.actions.retry')}
 							</Button>
 						{/if}
+
+						<!-- Change Status Dropdown -->
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger>
+								{#snippet child({ props })}
+									<Button {...props} variant="outline" class="w-full sm:w-auto" disabled={isProcessing}>
+										<RefreshCcw class="mr-2 h-4 w-4" />
+										Change Status
+										<ChevronDown class="ml-1 h-3 w-3" />
+									</Button>
+								{/snippet}
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Content align="start" class="w-56">
+								<DropdownMenu.Label>Set Status</DropdownMenu.Label>
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item
+									onclick={() => changeBatchStatus('pending')}
+									disabled={batch.status === 'pending'}
+								>
+									Set to Pending (deletes data)
+								</DropdownMenu.Item>
+								<DropdownMenu.Item
+									onclick={() => changeBatchStatus('review')}
+									disabled={batch.status === 'review'}
+								>
+									Set to Review
+								</DropdownMenu.Item>
+								<DropdownMenu.Item
+									onclick={() => changeBatchStatus('approved')}
+									disabled={batch.status === 'approved'}
+								>
+									Set to Approved
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item
+									onclick={() => changeBatchStatus('failed')}
+									disabled={batch.status === 'failed'}
+									class="text-destructive focus:text-destructive"
+								>
+									Set to Failed (deletes data)
+								</DropdownMenu.Item>
+							</DropdownMenu.Content>
+						</DropdownMenu.Root>
 
 						<div class="flex-1"></div>
 

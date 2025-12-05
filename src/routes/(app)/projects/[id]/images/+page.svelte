@@ -5,7 +5,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { t } from '$lib/i18n';
-	import { Upload, ImageIcon, Play, Trash2, X, Check, RotateCw, ChevronDown } from 'lucide-svelte';
+	import { Upload, ImageIcon, Play, Trash2, X, Check, RotateCw, ChevronDown, RefreshCcw, CheckSquare } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, isProjectLoading } from '$lib/stores/project-data';
@@ -148,7 +148,16 @@
 		return t(`images.gallery.status.${status}`);
 	}
 
-	function handleBatchClick(batchId: string) {
+	function handleBatchClick(batchId: string, event: MouseEvent) {
+		// Ctrl+Click or Cmd+Click to select (PC support)
+		if (event.ctrlKey || event.metaKey) {
+			if (!selectionMode) {
+				enterSelectionMode();
+			}
+			toggleBatchSelection(batchId);
+			return;
+		}
+
 		if (selectionMode) {
 			toggleBatchSelection(batchId);
 		} else {
@@ -294,7 +303,7 @@
 		longPressStarted = false;
 	}
 
-	// Reprocess functions
+	// Reprocess functions - clears extraction data and enqueues for processing
 	async function reprocessSelected() {
 		if (selectedBatches.size === 0) {
 			toast.error('No batches selected');
@@ -304,7 +313,22 @@
 		try {
 			const batchIds = Array.from(selectedBatches);
 
-			// Enqueue all selected batches
+			// First, reset to pending (this deletes extraction_rows via the status API)
+			const statusResponse = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds,
+					targetStatus: 'pending',
+					projectId: data.projectId
+				})
+			});
+
+			if (!statusResponse.ok) {
+				throw new Error('Failed to reset batch status');
+			}
+
+			// Then enqueue for processing
 			const response = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -347,17 +371,24 @@
 				return;
 			}
 
-			// Reset all to pending and enqueue
 			const batchIds = batches.map(b => b.id);
 
-			for (const batch of batches) {
-				await pb.collection('image_batches').update(batch.id, {
-					status: 'pending',
-					processed_data: null
-				});
+			// First, reset to pending (this deletes extraction_rows via the status API)
+			const statusResponse = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds,
+					targetStatus: 'pending',
+					projectId: data.projectId
+				})
+			});
+
+			if (!statusResponse.ok) {
+				throw new Error('Failed to reset batch status');
 			}
 
-			// Enqueue all batches
+			// Then enqueue for processing
 			const response = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -387,7 +418,7 @@
 	}
 
 	async function reprocessAll() {
-		if (!confirm('Reprocess ALL batches? This will reset all statuses to pending and reprocess everything.')) {
+		if (!confirm('Reprocess ALL batches? This will delete all extraction data and reprocess everything.')) {
 			return;
 		}
 
@@ -403,17 +434,24 @@
 				return;
 			}
 
-			// Reset all to pending and enqueue
 			const batchIds = batches.map(b => b.id);
 
-			for (const batch of batches) {
-				await pb.collection('image_batches').update(batch.id, {
-					status: 'pending',
-					processed_data: null
-				});
+			// First, reset to pending (this deletes extraction_rows via the status API)
+			const statusResponse = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds,
+					targetStatus: 'pending',
+					projectId: data.projectId
+				})
+			});
+
+			if (!statusResponse.ok) {
+				throw new Error('Failed to reset batch status');
 			}
 
-			// Enqueue all batches
+			// Then enqueue for processing
 			const response = await fetch('/api/queue/enqueue', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -456,17 +494,43 @@
 
 		let successCount = 0;
 		let failCount = 0;
+		const now = new Date().toISOString();
 
 		toast.info(`Approving ${reviewBatches.length} batch${reviewBatches.length === 1 ? '' : 'es'}...`);
 
-		for (const batch of reviewBatches) {
-			try {
-				await pb.collection('image_batches').update(batch.id, { status: 'approved' });
-				successCount++;
-			} catch (error) {
-				console.error(`Failed to approve batch ${batch.id}:`, error);
-				failCount++;
+		// Collect all batch IDs
+		const batchIds = reviewBatches.map((b) => b.id);
+		const batchFilter = batchIds.map((id) => `batch = '${id}'`).join(' || ');
+
+		try {
+			// First, get all extraction_rows for these batches that are in 'review' status
+			const allRows = await pb.collection('extraction_rows').getFullList({
+				filter: `(${batchFilter}) && status = 'review'`
+			});
+
+			// Update all extraction_rows using batch API
+			if (allRows.length > 0) {
+				const updateBatch = pb.createBatch();
+				for (const row of allRows) {
+					updateBatch.collection('extraction_rows').update(row.id, {
+						status: 'approved',
+						approved_at: now
+					});
+				}
+				await updateBatch.send();
 			}
+
+			// Then update all batch statuses
+			const batchUpdateBatch = pb.createBatch();
+			for (const batch of reviewBatches) {
+				batchUpdateBatch.collection('image_batches').update(batch.id, { status: 'approved' });
+			}
+			await batchUpdateBatch.send();
+
+			successCount = reviewBatches.length;
+		} catch (error) {
+			console.error('Failed to approve batches:', error);
+			failCount = reviewBatches.length;
 		}
 
 		await loadAllBatchesWithImages();
@@ -476,6 +540,50 @@
 			toast.success(`Successfully approved ${successCount} batch${successCount === 1 ? '' : 'es'}!`);
 		} else {
 			toast.warning(`Approved ${successCount} batch${successCount === 1 ? '' : 'es'}, ${failCount} failed`);
+		}
+	}
+
+	async function changeStatus(targetStatus: 'pending' | 'review' | 'approved' | 'failed') {
+		if (selectedBatches.size === 0) return;
+
+		const isDestructive = targetStatus === 'pending' || targetStatus === 'failed';
+		if (isDestructive && !confirm(`This will delete all extraction data for ${selectedBatches.size} batch(es). Continue?`)) {
+			return;
+		}
+
+		isProcessing = true;
+
+		try {
+			const response = await fetch('/api/batches/status', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					batchIds: Array.from(selectedBatches),
+					targetStatus,
+					projectId: data.projectId
+				})
+			});
+
+			const result = await response.json();
+
+			if (!response.ok) {
+				throw new Error(result.error || 'Failed to change status');
+			}
+
+			if (result.failCount > 0) {
+				toast.warning(`Updated ${result.successCount}, failed ${result.failCount}`);
+			} else {
+				toast.success(`Updated ${result.successCount} batch(es) to ${targetStatus}`);
+			}
+
+			exitSelectionMode();
+			await loadAllBatchesWithImages();
+			await projectData.invalidate();
+		} catch (error) {
+			console.error('Failed to change status:', error);
+			toast.error(error instanceof Error ? error.message : 'Failed to change batch status');
+		} finally {
+			isProcessing = false;
 		}
 	}
 </script>
@@ -507,6 +615,15 @@
 						<p class="text-sm text-muted-foreground">{$currentProject.name}</p>
 					</div>
 					<div class="flex gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={statusCounts.all === 0}
+							onclick={enterSelectionMode}
+						>
+							<CheckSquare class="mr-2 h-4 w-4" />
+							<span class="hidden sm:inline">Select</span>
+						</Button>
 						<Button
 							variant="outline"
 							size="sm"
@@ -641,7 +758,7 @@
 					<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
 						{#each displayedBatches as batch (batch.id)}
 							<button
-								onclick={() => handleBatchClick(batch.id)}
+								onclick={(e) => handleBatchClick(batch.id, e)}
 								ontouchstart={() => handleTouchStart(batch.id)}
 								ontouchend={handleTouchEnd}
 								ontouchmove={handleTouchMove}
@@ -706,6 +823,35 @@
 		{#if selectionMode && selectedBatches.size > 0}
 			<div class="fixed bottom-0 left-0 right-0 z-50 border-t bg-background p-4 shadow-2xl backdrop-blur-sm">
 				<div class="mx-auto flex max-w-4xl gap-2">
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger>
+							{#snippet child({ props })}
+								<Button {...props} variant="outline" class="flex-1" disabled={isProcessing}>
+									<RefreshCcw class="mr-2 h-4 w-4" />
+									<span class="hidden sm:inline">Change Status</span>
+									<span class="sm:hidden">Status</span>
+									<ChevronDown class="ml-1 h-3 w-3" />
+								</Button>
+							{/snippet}
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Content align="start" class="w-56">
+							<DropdownMenu.Label>Set Status</DropdownMenu.Label>
+							<DropdownMenu.Separator />
+							<DropdownMenu.Item onclick={() => changeStatus('pending')}>
+								Set to Pending (deletes data)
+							</DropdownMenu.Item>
+							<DropdownMenu.Item onclick={() => changeStatus('review')}>
+								Set to Review
+							</DropdownMenu.Item>
+							<DropdownMenu.Item onclick={() => changeStatus('approved')}>
+								Set to Approved
+							</DropdownMenu.Item>
+							<DropdownMenu.Separator />
+							<DropdownMenu.Item onclick={() => changeStatus('failed')} class="text-destructive focus:text-destructive">
+								Set to Failed (deletes data)
+							</DropdownMenu.Item>
+						</DropdownMenu.Content>
+					</DropdownMenu.Root>
 					<Button
 						class="flex-1"
 						disabled={isProcessing}

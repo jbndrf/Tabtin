@@ -16,19 +16,27 @@
 	import type {
 		ChatState,
 		Column,
+		ChatMessage,
 		PendingToolCall,
 		Question,
 		QuestionAnswer,
 		ImageRequest,
 		ToolResult,
 		ChatModeResponse,
-		ExecuteModeResponse
+		ExecuteModeResponse,
+		DocumentAnalysis,
+		ToolCall
 	} from '$lib/server/schema-chat/types';
 
-	export interface Message {
-		role: 'user' | 'assistant';
+	// UI-friendly message for display (simplified from ChatMessage)
+	export interface DisplayMessage {
+		role: 'user' | 'assistant' | 'tool';
 		content: string;
 		toolResults?: ToolResult[];
+		// Hidden from UI but preserved for API
+		tool_calls?: ToolCall[];
+		tool_call_id?: string;
+		name?: string;
 	}
 
 	interface Props {
@@ -39,11 +47,15 @@
 		modelName: string;
 		columns: Column[];
 		projectDescription?: string;
+		multiRowExtraction?: boolean;
 		hasExistingData?: boolean;
-		chatHistory?: Message[];
+		chatHistory?: DisplayMessage[];
+		documentAnalyses?: DocumentAnalysis[];
 		onColumnsChange: (columns: Column[]) => void;
 		onDescriptionChange?: (description: string) => void;
-		onChatHistoryChange?: (messages: Message[]) => void;
+		onMultiRowChange?: (enabled: boolean) => void;
+		onChatHistoryChange?: (messages: DisplayMessage[]) => void;
+		onDocumentAnalysesChange?: (analyses: DocumentAnalysis[]) => void;
 		onClose: () => void;
 	}
 
@@ -55,24 +67,32 @@
 		modelName,
 		columns,
 		projectDescription = '',
+		multiRowExtraction = false,
 		hasExistingData = false,
 		chatHistory = [],
+		documentAnalyses = [],
 		onColumnsChange,
 		onDescriptionChange,
+		onMultiRowChange,
 		onChatHistoryChange,
+		onDocumentAnalysesChange,
 		onClose
 	}: Props = $props();
 
 	// State machine
 	let chatState = $state<ChatState>('idle');
-	let messages = $state<Message[]>([]);
+	let messages = $state<DisplayMessage[]>([]);
 	let inputValue = $state('');
 	let messagesContainer: HTMLDivElement | null = $state(null);
 
 	// Pending interactions
 	let pendingTools = $state<PendingToolCall[]>([]);
+	let pendingAssistantMessage = $state<DisplayMessage | null>(null); // Store assistant message while waiting for approval
 	let currentQuestions = $state<Question[]>([]);
 	let currentImageRequest = $state<ImageRequest | null>(null);
+
+	// Document memory
+	let storedDocumentAnalyses = $state<DocumentAnalysis[]>([]);
 
 	// UI state
 	let showDataWarning = $state(false);
@@ -81,6 +101,7 @@
 	let isMobile = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
 	let isProcessingFiles = $state(false);
+	let hasInitialized = $state(false);
 
 	// Check if LLM is configured
 	let isConfigured = $derived.by(() => {
@@ -114,22 +135,96 @@
 		}
 	});
 
-	// Load chat history when chat opens
+	// Load chat history and document analyses when chat opens, or initialize new conversation
 	$effect(() => {
-		if (open && messages.length === 0 && isConfigured) {
+		if (open && isConfigured && !hasInitialized) {
+			hasInitialized = true;
+
 			if (chatHistory && chatHistory.length > 0) {
 				// Load existing chat history
 				messages = [...chatHistory];
+				if (documentAnalyses && documentAnalyses.length > 0) {
+					storedDocumentAnalyses = [...documentAnalyses];
+				}
+				chatState = 'idle';
+			} else {
+				// New conversation - load document analyses and initialize
+				if (documentAnalyses && documentAnalyses.length > 0) {
+					storedDocumentAnalyses = [...documentAnalyses];
+				}
+				// Start with project state
+				initializeConversation();
 			}
-			// No else - we show a UI placeholder instead of a fake message
-			chatState = 'idle';
 		}
 	});
+
+	// Reset initialization flag when chat closes
+	$effect(() => {
+		if (!open) {
+			hasInitialized = false;
+		}
+	});
+
+	async function initializeConversation() {
+		chatState = 'loading';
+
+		// Build initial context message about current project state
+		const initialContext = buildProjectStateMessage();
+
+		// Add as a system-context user message
+		messages = [{ role: 'user', content: initialContext }];
+
+		await callLLM();
+	}
+
+	function buildProjectStateMessage(): string {
+		const parts: string[] = ['[PROJECT STATE]'];
+
+		// Project description
+		if (projectDescription) {
+			parts.push(`Description: ${projectDescription}`);
+		} else {
+			parts.push('Description: Not set');
+		}
+
+		// Multi-row mode
+		parts.push(`Multi-row extraction: ${multiRowExtraction ? 'Enabled' : 'Disabled'}`);
+
+		// Current columns
+		if (columns.length === 0) {
+			parts.push('Columns: None defined yet');
+		} else {
+			parts.push(`Columns (${columns.length}):`);
+			columns.forEach((col, i) => {
+				let colDesc = `  ${i + 1}. ${col.name} (${col.type}): ${col.description}`;
+				if (col.allowedValues) {
+					colDesc += ` [Allowed: ${col.allowedValues}]`;
+				}
+				parts.push(colDesc);
+			});
+		}
+
+		// Document analyses summary
+		if (storedDocumentAnalyses.length > 0) {
+			parts.push(`\nPreviously analyzed documents: ${storedDocumentAnalyses.length}`);
+		}
+
+		parts.push('\nPlease greet me and ask how you can help with my schema design.');
+
+		return parts.join('\n');
+	}
 
 	// Save chat history when messages change
 	$effect(() => {
 		if (messages.length > 0 && onChatHistoryChange) {
 			onChatHistoryChange(messages);
+		}
+	});
+
+	// Save document analyses when they change
+	$effect(() => {
+		if (storedDocumentAnalyses.length > 0 && onDocumentAnalysesChange) {
+			onDocumentAnalysesChange(storedDocumentAnalyses);
 		}
 	});
 
@@ -139,6 +234,31 @@
 			showDataWarning = true;
 		}
 	});
+
+	// Convert display messages to API format (preserving tool_calls and tool responses)
+	function messagesToApiFormat(): ChatMessage[] {
+		return messages.map((m) => {
+			if (m.role === 'tool') {
+				return {
+					role: 'tool' as const,
+					content: m.content,
+					tool_call_id: m.tool_call_id,
+					name: m.name
+				};
+			} else if (m.role === 'assistant' && m.tool_calls) {
+				return {
+					role: 'assistant' as const,
+					content: m.content,
+					tool_calls: m.tool_calls
+				};
+			} else {
+				return {
+					role: m.role as 'user' | 'assistant',
+					content: m.content
+				};
+			}
+		});
+	}
 
 	async function sendMessage(content?: string) {
 		const messageContent = content || inputValue.trim();
@@ -150,16 +270,23 @@
 		// Add user message
 		messages = [...messages, { role: 'user', content: messageContent }];
 
+		await callLLM();
+	}
+
+	// Core agent loop - calls LLM and handles response
+	async function callLLM() {
 		try {
 			const response = await fetch('/api/schema-chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					mode: 'chat',
-					messages: messages.map((m) => ({ role: m.role, content: m.content })),
+					messages: messagesToApiFormat(),
 					settings: { endpoint, apiKey, modelName },
 					currentColumns: columns,
 					projectDescription,
+					multiRowExtraction,
+					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
 			});
@@ -170,7 +297,7 @@
 			}
 
 			const data = (await response.json()) as ChatModeResponse;
-			handleChatResponse(data);
+			await handleChatResponse(data);
 		} catch (err) {
 			console.error('Chat error:', err);
 			toast.error(err instanceof Error ? err.message : 'Failed to send message');
@@ -185,27 +312,60 @@
 		}
 	}
 
-	function handleChatResponse(data: ChatModeResponse) {
-		// Add assistant message
-		const assistantMessage: Message = {
+	async function handleChatResponse(data: ChatModeResponse) {
+		// Add assistant message with tool_calls preserved
+		const assistantMessage: DisplayMessage = {
 			role: 'assistant',
-			content: data.message.content || '',
-			toolResults: data.autoExecuteResults
+			content: typeof data.message.content === 'string' ? data.message.content : '',
+			toolResults: data.autoExecuteResults,
+			tool_calls: data.message.tool_calls
 		};
-		messages = [...messages, assistantMessage];
 
-		// Handle different response types (priority order: questions > image request > pending tools)
-		if (data.questions && data.questions.length > 0) {
-			currentQuestions = data.questions;
-			chatState = 'awaiting_answers';
-		} else if (data.imageRequest) {
-			currentImageRequest = data.imageRequest;
-			chatState = 'awaiting_image';
-		} else if (data.pendingTools && data.pendingTools.length > 0) {
+		// Store document analysis if present
+		if (data.documentAnalysis) {
+			storedDocumentAnalyses = [...storedDocumentAnalyses, data.documentAnalysis];
+		}
+
+		// Handle different response types
+		if (data.pendingTools && data.pendingTools.length > 0) {
+			// Store the assistant message but don't add to visible history yet
+			// We'll add it along with tool responses after user approval
+			pendingAssistantMessage = assistantMessage;
 			pendingTools = data.pendingTools;
 			chatState = 'awaiting_approval';
 		} else {
-			chatState = 'idle';
+			// No approval needed - add message to history
+			messages = [...messages, assistantMessage];
+
+			// Add tool response messages if any (for auto-executed tools)
+			if (data.toolMessages && data.toolMessages.length > 0) {
+				const toolDisplayMessages: DisplayMessage[] = data.toolMessages.map((tm) => ({
+					role: 'tool' as const,
+					content: typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content),
+					tool_call_id: tm.tool_call_id,
+					name: tm.name
+				}));
+				messages = [...messages, ...toolDisplayMessages];
+			}
+
+			// Check if we should continue the agent loop
+			if (data.shouldContinue) {
+				chatState = 'auto_continuing';
+				// Continue the agent loop - call LLM again with tool results
+				await callLLM();
+				return;
+			}
+
+			// Handle UI interactions
+			if (data.questions && data.questions.length > 0) {
+				currentQuestions = data.questions;
+				chatState = 'awaiting_answers';
+			} else if (data.imageRequest) {
+				currentImageRequest = data.imageRequest;
+				chatState = 'awaiting_image';
+			} else {
+				chatState = 'idle';
+			}
 		}
 	}
 
@@ -221,7 +381,7 @@
 		if (files.length === 0) return;
 
 		currentImageRequest = null;
-		chatState = 'auto_continuing';
+		chatState = 'loading';
 
 		// Convert files to base64 for sending to LLM
 		const imageContents: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
@@ -237,29 +397,33 @@
 		// Send message with images
 		const userMessage = `Here ${files.length === 1 ? 'is an example' : `are ${files.length} example`} document${files.length > 1 ? 's' : ''} for you to analyze.`;
 
-		// Add user message to UI
+		// Add user message to UI (simplified - we don't store images in history)
 		messages = [...messages, { role: 'user', content: userMessage }];
 
 		try {
+			// Build messages with multimodal content for this request only
+			const apiMessages = messagesToApiFormat();
+			// Replace the last message with multimodal version
+			apiMessages[apiMessages.length - 1] = {
+				role: 'user',
+				content: [
+					{ type: 'text', text: userMessage },
+					...imageContents
+				]
+			};
+
 			// Send to API with images as multimodal content
 			const response = await fetch('/api/schema-chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					mode: 'chat',
-					messages: [
-						...messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
-						{
-							role: 'user',
-							content: [
-								{ type: 'text', text: userMessage },
-								...imageContents
-							]
-						}
-					],
+					messages: apiMessages,
 					settings: { endpoint, apiKey, modelName },
 					currentColumns: columns,
 					projectDescription,
+					multiRowExtraction,
+					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
 			});
@@ -270,7 +434,7 @@
 			}
 
 			const data = (await response.json()) as ChatModeResponse;
-			handleChatResponse(data);
+			await handleChatResponse(data);
 		} catch (err) {
 			console.error('Image submit error:', err);
 			toast.error(err instanceof Error ? err.message : 'Failed to analyze images');
@@ -342,24 +506,28 @@
 			const userMessage = `Here ${imageFiles.length === 1 ? 'is an example document' : `are ${imageFiles.length} example pages`} for you to analyze.`;
 			messages = [...messages, { role: 'user', content: userMessage }];
 
+			// Build messages with multimodal content for this request only
+			const apiMessages = messagesToApiFormat();
+			// Replace the last message with multimodal version
+			apiMessages[apiMessages.length - 1] = {
+				role: 'user',
+				content: [
+					{ type: 'text', text: userMessage },
+					...imageContents
+				]
+			};
+
 			const response = await fetch('/api/schema-chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					mode: 'chat',
-					messages: [
-						...messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content })),
-						{
-							role: 'user',
-							content: [
-								{ type: 'text', text: userMessage },
-								...imageContents
-							]
-						}
-					],
+					messages: apiMessages,
 					settings: { endpoint, apiKey, modelName },
 					currentColumns: columns,
 					projectDescription,
+					multiRowExtraction,
+					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
 			});
@@ -370,7 +538,7 @@
 			}
 
 			const data = (await response.json()) as ChatModeResponse;
-			handleChatResponse(data);
+			await handleChatResponse(data);
 		} catch (err) {
 			console.error('File upload error:', err);
 			toast.error(err instanceof Error ? err.message : 'Failed to process files');
@@ -448,22 +616,6 @@
 
 			const data = (await response.json()) as ExecuteModeResponse;
 
-			// Update tool results
-			pendingTools = pendingTools.map((t) => {
-				const result = data.results.find((r) => r.toolCallId === t.id);
-				if (result) {
-					return {
-						...t,
-						status: 'executed' as const,
-						result: {
-							success: result.success,
-							message: result.message || result.error || ''
-						}
-					};
-				}
-				return t;
-			});
-
 			// Update columns if changed
 			if (data.updatedColumns) {
 				onColumnsChange(data.updatedColumns);
@@ -475,18 +627,36 @@
 				onDescriptionChange(data.updatedDescription);
 			}
 
-			// Format results for auto-continue
-			const resultsText = data.results
-				.map((r) => `${r.toolName}: ${r.success ? r.message : `DECLINED - ${r.message}`}`)
-				.join('\n');
+			// Update multi-row extraction if changed
+			if (data.updatedMultiRowExtraction !== undefined && onMultiRowChange) {
+				onMultiRowChange(data.updatedMultiRowExtraction);
+			}
 
-			// Clear pending tools and auto-continue
-			const toolsToReport = [...pendingTools];
+			// Add the pending assistant message to history (with tool_calls)
+			if (pendingAssistantMessage) {
+				// Update with tool results for display
+				pendingAssistantMessage.toolResults = data.results;
+				messages = [...messages, pendingAssistantMessage];
+				pendingAssistantMessage = null;
+			}
+
+			// Add tool response messages to history for proper API format
+			if (data.toolMessages && data.toolMessages.length > 0) {
+				const toolDisplayMessages: DisplayMessage[] = data.toolMessages.map((tm) => ({
+					role: 'tool' as const,
+					content: typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content),
+					tool_call_id: tm.tool_call_id,
+					name: tm.name
+				}));
+				messages = [...messages, ...toolDisplayMessages];
+			}
+
+			// Clear pending tools
 			pendingTools = [];
-			chatState = 'auto_continuing';
 
-			// Send results back to AI
-			await sendMessage(`Tool execution results:\n${resultsText}`);
+			// Continue the agent loop - call LLM with tool results
+			chatState = 'auto_continuing';
+			await callLLM();
 		} catch (err) {
 			console.error('Tool execution error:', err);
 			toast.error(err instanceof Error ? err.message : 'Failed to execute tools');
@@ -522,13 +692,21 @@
 	function clearChat() {
 		messages = [];
 		pendingTools = [];
+		pendingAssistantMessage = null;
 		currentQuestions = [];
 		currentImageRequest = null;
+		storedDocumentAnalyses = [];
 		chatState = 'idle';
 		showClearConfirm = false;
+		hasInitialized = false; // Reset to trigger new initialization
 		if (onChatHistoryChange) {
 			onChatHistoryChange([]);
 		}
+		if (onDocumentAnalysesChange) {
+			onDocumentAnalysesChange([]);
+		}
+		// Re-initialize the conversation with fresh project state
+		initializeConversation();
 	}
 </script>
 

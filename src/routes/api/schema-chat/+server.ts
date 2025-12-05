@@ -10,7 +10,9 @@ import {
 	type RemoveColumnArgs,
 	type UpdateProjectDescriptionArgs,
 	type AskQuestionsArgs,
-	type RequestExampleImageArgs
+	type RequestExampleImageArgs,
+	type SetMultiRowModeArgs,
+	type AnalyzeDocumentArgs
 } from '$lib/server/schema-chat/tools';
 import { buildSystemPromptWithSchema } from '$lib/server/schema-chat/system-prompt';
 import type {
@@ -22,7 +24,9 @@ import type {
 	ToolResult,
 	ChatModeRequest,
 	ExecuteModeRequest,
-	SchemaChatRequest
+	SchemaChatRequest,
+	DocumentAnalysis,
+	ToolCall
 } from '$lib/server/schema-chat/types';
 
 function generateColumnId(): string {
@@ -37,13 +41,24 @@ function generateOptionId(questionIndex: number, optionIndex: number): string {
 	return `opt_${questionIndex}_${optionIndex}`;
 }
 
+// Tool execution result type
+interface ToolExecutionResult {
+	success: boolean;
+	message: string;
+	updatedColumns?: Column[];
+	updatedDescription?: string;
+	updatedMultiRowExtraction?: boolean;
+	documentAnalysis?: DocumentAnalysis;
+}
+
 // Execute a single tool and return the result
 function executeToolCall(
 	toolName: string,
 	argsString: string,
 	columns: Column[],
-	projectDescription?: string
-): { success: boolean; message: string; updatedColumns?: Column[]; updatedDescription?: string } {
+	projectDescription?: string,
+	multiRowExtraction?: boolean
+): ToolExecutionResult {
 	try {
 		const args = JSON.parse(argsString);
 
@@ -149,6 +164,42 @@ function executeToolCall(
 				};
 			}
 
+			case 'get_project_settings': {
+				return {
+					success: true,
+					message: `Current settings:\n- Multi-row extraction: ${multiRowExtraction ? 'ENABLED' : 'DISABLED'}\n- Project description: ${projectDescription || '(not set)'}`
+				};
+			}
+
+			case 'set_multi_row_mode': {
+				const { enabled, reason } = args as SetMultiRowModeArgs;
+
+				return {
+					success: true,
+					message: `Multi-row extraction ${enabled ? 'ENABLED' : 'DISABLED'}. ${reason}`,
+					updatedMultiRowExtraction: enabled
+				};
+			}
+
+			case 'analyze_document': {
+				const { summary, documentType, identifiedFields } = args as AnalyzeDocumentArgs;
+
+				const analysis: DocumentAnalysis = {
+					id: generateColumnId(),
+					timestamp: Date.now(),
+					summary,
+					documentType,
+					identifiedFields,
+					imageCount: 1 // Will be updated by caller if needed
+				};
+
+				return {
+					success: true,
+					message: `Document analysis stored: ${documentType}. Identified ${identifiedFields.length} potential fields.`,
+					documentAnalysis: analysis
+				};
+			}
+
 			default:
 				return {
 					success: false,
@@ -206,13 +257,13 @@ function parseImageRequestFromToolCall(
 
 // Handle chat mode - call LLM and categorize tool calls
 async function handleChatMode(body: ChatModeRequest) {
-	const { messages, settings, currentColumns, projectDescription } = body;
+	const { messages, settings, currentColumns, projectDescription, multiRowExtraction, documentAnalyses } = body;
 
 	if (!settings.endpoint || !settings.modelName) {
 		return json({ error: 'LLM settings (endpoint and modelName) are required' }, { status: 400 });
 	}
 
-	// Build system prompt with current schema
+	// Build system prompt with current schema, settings, and document memory
 	const systemPrompt = buildSystemPromptWithSchema(
 		currentColumns.map((c) => ({
 			id: c.id,
@@ -221,11 +272,44 @@ async function handleChatMode(body: ChatModeRequest) {
 			description: c.description,
 			allowedValues: c.allowedValues
 		})),
-		projectDescription
+		projectDescription,
+		multiRowExtraction,
+		documentAnalyses
 	);
 
-	// Prepare messages for LLM
-	const llmMessages = [{ role: 'system', content: systemPrompt }, ...messages];
+	// Prepare messages for LLM - preserve full message structure including tool_calls
+	const llmMessages: Array<{
+		role: string;
+		content: string | Array<{ type: string; text?: string; image_url?: { url: string; detail?: string } }> | null;
+		tool_calls?: ToolCall[];
+		tool_call_id?: string;
+		name?: string;
+	}> = [{ role: 'system', content: systemPrompt }];
+
+	for (const msg of messages) {
+		if (msg.role === 'tool') {
+			// Tool response message
+			llmMessages.push({
+				role: 'tool',
+				content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+				tool_call_id: msg.tool_call_id,
+				name: msg.name
+			});
+		} else if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+			// Assistant message with tool calls - preserve structure
+			llmMessages.push({
+				role: 'assistant',
+				content: msg.content,
+				tool_calls: msg.tool_calls
+			});
+		} else {
+			// Regular user or assistant message
+			llmMessages.push({
+				role: msg.role,
+				content: msg.content
+			});
+		}
+	}
 
 	// Call LLM with tools
 	const response = await fetch(settings.endpoint, {
@@ -263,6 +347,8 @@ async function handleChatMode(body: ChatModeRequest) {
 	let questions: Question[] | undefined;
 	let imageRequest: ImageRequest | undefined;
 	const autoExecuteResults: ToolResult[] = [];
+	const toolMessages: ChatMessage[] = [];
+	let documentAnalysis: DocumentAnalysis | undefined;
 
 	if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
 		for (const toolCall of assistantMessage.tool_calls) {
@@ -284,14 +370,29 @@ async function handleChatMode(body: ChatModeRequest) {
 					toolName,
 					toolCall.function.arguments,
 					currentColumns,
-					projectDescription
+					projectDescription,
+					multiRowExtraction
 				);
+
 				autoExecuteResults.push({
 					toolCallId: toolCall.id,
 					toolName,
 					success: result.success,
 					message: result.message
 				});
+
+				// Create proper tool response message for conversation history
+				toolMessages.push({
+					role: 'tool',
+					content: JSON.stringify({ success: result.success, message: result.message }),
+					tool_call_id: toolCall.id,
+					name: toolName
+				});
+
+				// Capture document analysis if present
+				if (result.documentAnalysis) {
+					documentAnalysis = result.documentAnalysis;
+				}
 			} else if (isApprovalRequired(toolName)) {
 				// Queue for user approval
 				pendingTools.push({
@@ -307,16 +408,25 @@ async function handleChatMode(body: ChatModeRequest) {
 		}
 	}
 
+	// Determine if the agent loop should continue (has auto-executed tools, no pending approval needed)
+	const shouldContinue = autoExecuteResults.length > 0 &&
+		pendingTools.length === 0 &&
+		!questions &&
+		!imageRequest;
+
 	return json({
 		message: {
-			role: 'assistant',
+			role: 'assistant' as const,
 			content: assistantMessage.content || '',
 			tool_calls: assistantMessage.tool_calls
 		},
+		toolMessages: toolMessages.length > 0 ? toolMessages : undefined,
 		pendingTools: pendingTools.length > 0 ? pendingTools : undefined,
 		questions: questions && questions.length > 0 ? questions : undefined,
 		imageRequest,
-		autoExecuteResults: autoExecuteResults.length > 0 ? autoExecuteResults : undefined
+		autoExecuteResults: autoExecuteResults.length > 0 ? autoExecuteResults : undefined,
+		documentAnalysis,
+		shouldContinue
 	});
 }
 
@@ -326,31 +436,52 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 
 	let updatedColumns = [...currentColumns];
 	let updatedDescription = projectDescription;
+	let updatedMultiRowExtraction: boolean | undefined;
 	const results: ToolResult[] = [];
+	const toolMessages: ChatMessage[] = [];
 
 	for (const decision of toolDecisions) {
+		const toolName = decision.function.name;
+
 		if (!decision.approved) {
 			results.push({
 				toolCallId: decision.id,
-				toolName: decision.function.name,
+				toolName,
 				success: false,
 				message: 'User declined this action'
+			});
+
+			// Create tool response message for declined action
+			toolMessages.push({
+				role: 'tool',
+				content: JSON.stringify({ success: false, message: 'User declined this action' }),
+				tool_call_id: decision.id,
+				name: toolName
 			});
 			continue;
 		}
 
 		const result = executeToolCall(
-			decision.function.name,
+			toolName,
 			decision.function.arguments,
 			updatedColumns,
-			updatedDescription
+			updatedDescription,
+			updatedMultiRowExtraction
 		);
 
 		results.push({
 			toolCallId: decision.id,
-			toolName: decision.function.name,
+			toolName,
 			success: result.success,
 			message: result.message
+		});
+
+		// Create proper tool response message for conversation history
+		toolMessages.push({
+			role: 'tool',
+			content: JSON.stringify({ success: result.success, message: result.message }),
+			tool_call_id: decision.id,
+			name: toolName
 		});
 
 		if (result.updatedColumns) {
@@ -359,12 +490,17 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 		if (result.updatedDescription !== undefined) {
 			updatedDescription = result.updatedDescription;
 		}
+		if (result.updatedMultiRowExtraction !== undefined) {
+			updatedMultiRowExtraction = result.updatedMultiRowExtraction;
+		}
 	}
 
 	return json({
 		results,
 		updatedColumns: updatedColumns !== currentColumns ? updatedColumns : undefined,
-		updatedDescription: updatedDescription !== projectDescription ? updatedDescription : undefined
+		updatedDescription: updatedDescription !== projectDescription ? updatedDescription : undefined,
+		updatedMultiRowExtraction,
+		toolMessages
 	});
 }
 

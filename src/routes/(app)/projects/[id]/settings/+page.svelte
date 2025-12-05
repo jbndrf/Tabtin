@@ -82,8 +82,32 @@
 	// Extraction mode
 	let multiRowExtraction = $state<boolean>(false);
 
-	// Schema chat history
+	// PDF Processing settings (Advanced)
+	const PDF_DEFAULTS = {
+		dpi: 600,
+		format: 'png' as 'png' | 'jpeg',
+		quality: 100,
+		maxWidth: 7100,
+		maxHeight: 7100
+	};
+	let pdfDpi = $state<number>(PDF_DEFAULTS.dpi);
+	let pdfFormat = $state<'png' | 'jpeg'>(PDF_DEFAULTS.format);
+	let pdfQuality = $state<number>(PDF_DEFAULTS.quality);
+	let pdfMaxWidth = $state<number>(PDF_DEFAULTS.maxWidth);
+	let pdfMaxHeight = $state<number>(PDF_DEFAULTS.maxHeight);
+
+	function resetPdfDefaults() {
+		pdfDpi = PDF_DEFAULTS.dpi;
+		pdfFormat = PDF_DEFAULTS.format;
+		pdfQuality = PDF_DEFAULTS.quality;
+		pdfMaxWidth = PDF_DEFAULTS.maxWidth;
+		pdfMaxHeight = PDF_DEFAULTS.maxHeight;
+		toast.success('PDF settings reset to defaults');
+	}
+
+	// Schema chat history and document analyses
 	let schemaChatHistory = $state<SchemaChatMessage[]>([]);
+	let documentAnalyses = $state<Array<{ id: string; timestamp: number; summary: string; documentType?: string; identifiedFields?: string[]; imageCount: number }>>([]);
 
 
 	// Load project data on mount
@@ -155,8 +179,16 @@
 			// Load extraction mode
 			multiRowExtraction = settings.multiRowExtraction || false;
 
-			// Load schema chat history
+			// Load PDF processing settings
+			pdfDpi = settings.pdfDpi ?? PDF_DEFAULTS.dpi;
+			pdfFormat = settings.pdfFormat ?? PDF_DEFAULTS.format;
+			pdfQuality = settings.pdfQuality ?? PDF_DEFAULTS.quality;
+			pdfMaxWidth = settings.pdfMaxWidth ?? PDF_DEFAULTS.maxWidth;
+			pdfMaxHeight = settings.pdfMaxHeight ?? PDF_DEFAULTS.maxHeight;
+
+			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
+			documentAnalyses = ($currentProject.document_analyses as typeof documentAnalyses) || [];
 
 			if (settings.columns && settings.columns.length > 0) {
 				columns = settings.columns.map((col: any) => ({
@@ -310,6 +342,12 @@
 				requestsPerMinute,
 				enableParallelRequests,
 				multiRowExtraction,
+				// PDF processing settings
+				pdfDpi,
+				pdfFormat,
+				pdfQuality,
+				pdfMaxWidth,
+				pdfMaxHeight,
 				columns: columns.map((col, index) => ({
 					id: String(index + 1),
 					name: col.name,
@@ -357,6 +395,18 @@
 		} catch (err) {
 			console.error('Failed to save chat history:', err);
 			// Silently fail - chat history is not critical
+		}
+	}
+
+	async function saveDocumentAnalyses(analyses: typeof documentAnalyses) {
+		try {
+			documentAnalyses = analyses;
+			await pb.collection('projects').update(data.projectId, {
+				document_analyses: analyses
+			});
+		} catch (err) {
+			console.error('Failed to save document analyses:', err);
+			// Silently fail - not critical
 		}
 	}
 
@@ -429,11 +479,12 @@
 
 <div class="space-y-6 p-4">
 	<Tabs.Root bind:value={activeTab} class="w-full">
-		<Tabs.List class="grid w-full grid-cols-4">
+		<Tabs.List class="grid w-full grid-cols-5">
 			<Tabs.Trigger value="basic">{t('project.settings.tabs.basic')}</Tabs.Trigger>
 			<Tabs.Trigger value="columns">{t('project.settings.tabs.columns')}</Tabs.Trigger>
 			<Tabs.Trigger value="prompts">{t('project.settings.tabs.prompts')}</Tabs.Trigger>
 			<Tabs.Trigger value="processing">Processing</Tabs.Trigger>
+			<Tabs.Trigger value="advanced">Advanced</Tabs.Trigger>
 		</Tabs.List>
 
 		<!-- Basic Tab -->
@@ -899,6 +950,188 @@
 				</div>
 			</div>
 		</Tabs.Content>
+
+		<!-- Advanced Tab -->
+		<Tabs.Content value="advanced" class="mt-4 space-y-4">
+			<div class="space-y-4">
+				<div class="flex items-start justify-between">
+					<div>
+						<h2 class="text-xl font-semibold">PDF Conversion Settings</h2>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Configure how PDF documents are converted to images before processing.
+						</p>
+					</div>
+					<Button variant="outline" size="sm" onclick={resetPdfDefaults}>
+						Reset to Defaults
+					</Button>
+				</div>
+
+				<Separator />
+
+				<!-- DPI Setting -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Label for="pdfDpi">Resolution (DPI)</Label>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-1">
+									<p class="font-medium">DPI (Dots Per Inch)</p>
+									<p class="text-xs">Higher DPI produces sharper images but increases file size and processing time.</p>
+									<p class="text-xs mt-2">Recommended values:</p>
+									<ul class="text-xs list-disc pl-4">
+										<li>150 DPI: Fast, good for clear documents</li>
+										<li>300 DPI: Balanced quality and speed</li>
+										<li>600 DPI: High quality (default)</li>
+									</ul>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+					<div class="flex gap-4 items-center">
+						<Input
+							type="number"
+							id="pdfDpi"
+							bind:value={pdfDpi}
+							min="72"
+							max="1200"
+							step="50"
+							class="h-12 w-32"
+						/>
+						<div class="flex gap-2">
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 150}>150</Button>
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 300}>300</Button>
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 600}>600</Button>
+						</div>
+					</div>
+				</div>
+
+				<!-- Format Setting -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Label for="pdfFormat">Output Format</Label>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">PNG (Default)</p>
+										<p class="text-xs">Lossless compression. Best for documents with text and sharp edges. Larger file size.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">JPEG</p>
+										<p class="text-xs">Lossy compression. Smaller file size. May introduce artifacts around text.</p>
+									</div>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+					<select
+						id="pdfFormat"
+						bind:value={pdfFormat}
+						class="flex h-12 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<option value="png">PNG (Lossless)</option>
+						<option value="jpeg">JPEG (Compressed)</option>
+					</select>
+				</div>
+
+				<!-- Quality Setting (only visible for JPEG) -->
+				{#if pdfFormat === 'jpeg'}
+					<div class="space-y-2">
+						<div class="flex items-center gap-2">
+							<Label for="pdfQuality">JPEG Quality</Label>
+							<span class="text-sm text-muted-foreground">{pdfQuality}%</span>
+						</div>
+						<input
+							type="range"
+							id="pdfQuality"
+							bind:value={pdfQuality}
+							min="50"
+							max="100"
+							step="5"
+							class="w-full max-w-xs"
+						/>
+						<p class="text-xs text-muted-foreground">
+							Higher quality means larger file size. 85-95% is usually a good balance.
+						</p>
+					</div>
+				{/if}
+
+				<Separator />
+
+				<!-- Max Dimensions -->
+				<div class="space-y-4">
+					<div>
+						<h3 class="text-lg font-medium">Maximum Dimensions</h3>
+						<p class="text-sm text-muted-foreground">
+							Limit the maximum output size. Images exceeding these dimensions will be scaled down proportionally.
+						</p>
+					</div>
+
+					<div class="grid grid-cols-2 gap-4 max-w-md">
+						<div class="space-y-2">
+							<Label for="pdfMaxWidth">Max Width (px)</Label>
+							<Input
+								type="number"
+								id="pdfMaxWidth"
+								bind:value={pdfMaxWidth}
+								min="1000"
+								max="15000"
+								step="100"
+								class="h-12"
+							/>
+						</div>
+						<div class="space-y-2">
+							<Label for="pdfMaxHeight">Max Height (px)</Label>
+							<Input
+								type="number"
+								id="pdfMaxHeight"
+								bind:value={pdfMaxHeight}
+								min="1000"
+								max="15000"
+								step="100"
+								class="h-12"
+							/>
+						</div>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						Default: 7100px (A4 at 600 DPI). Lower values reduce memory usage and API costs.
+					</p>
+				</div>
+
+				<Separator />
+
+				<!-- Info Card -->
+				<Card.Root class="bg-muted/50">
+					<Card.Content class="pt-6">
+						<div class="space-y-2 text-sm">
+							<p class="font-medium">Current estimated settings:</p>
+							<ul class="text-muted-foreground space-y-1">
+								<li>Scale factor: {(pdfDpi / 72).toFixed(2)}x</li>
+								<li>Format: {pdfFormat.toUpperCase()}{pdfFormat === 'jpeg' ? ` at ${pdfQuality}% quality` : ''}</li>
+								<li>Max output: {pdfMaxWidth} x {pdfMaxHeight} pixels</li>
+							</ul>
+							<p class="text-xs text-muted-foreground mt-3">
+								These settings apply when PDFs are uploaded and converted to images for vision model processing.
+							</p>
+						</div>
+					</Card.Content>
+				</Card.Root>
+			</div>
+		</Tabs.Content>
 	</Tabs.Root>
 </div>
 
@@ -1177,14 +1410,20 @@
 		{modelName}
 		{columns}
 		projectDescription={description}
+		{multiRowExtraction}
 		chatHistory={schemaChatHistory}
+		{documentAnalyses}
 		onColumnsChange={(newColumns) => {
 			columns = newColumns.map(col => ({ ...col, expanded: col.expanded ?? false }));
 		}}
 		onDescriptionChange={(newDescription) => {
 			description = newDescription;
 		}}
+		onMultiRowChange={(enabled) => {
+			multiRowExtraction = enabled;
+		}}
 		onChatHistoryChange={saveChatHistory}
+		onDocumentAnalysesChange={saveDocumentAnalyses}
 		onClose={() => schemaChatOpen = false}
 	/>
 {/if}

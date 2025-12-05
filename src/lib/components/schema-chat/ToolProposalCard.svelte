@@ -53,7 +53,8 @@
 		add_column: Plus,
 		edit_column: Pencil,
 		remove_column: Trash2,
-		update_project_description: FileText
+		update_project_description: FileText,
+		set_multi_row_mode: ToggleLeft
 	};
 
 	// Column type icons
@@ -120,6 +121,13 @@
 				return {
 					title: 'Update project description',
 					description: parsedArgs.description,
+					details: []
+				};
+
+			case 'set_multi_row_mode':
+				return {
+					title: `${parsedArgs.enabled ? 'Enable' : 'Disable'} multi-row extraction`,
+					description: parsedArgs.reason,
 					details: []
 				};
 

@@ -15,7 +15,8 @@ export type {
 	QuestionAnswer,
 	QuestionOption,
 	ImageRequest,
-	ToolResult
+	ToolResult,
+	DocumentAnalysis
 } from '$lib/server/schema-chat/types';
 
-export type { Message } from './SchemaChat.svelte';
+export type { DisplayMessage as Message } from './SchemaChat.svelte';
