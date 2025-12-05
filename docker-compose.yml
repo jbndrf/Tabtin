@@ -36,6 +36,7 @@ services:
       - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL}
       - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD}
       - POCKETBASE_URL=http://backend:8090
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
     ports:
       - "80:80"
     depends_on:

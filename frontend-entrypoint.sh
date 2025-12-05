@@ -3,6 +3,9 @@
 # Process supervision: ensure container exits if either process dies
 # This triggers Docker's restart policy instead of leaving a zombie container
 
+# Set default body size limit if not provided
+export BODY_SIZE_LIMIT="${BODY_SIZE_LIMIT:-50M}"
+
 # Start Node.js in background
 node build/index.js &
 NODE_PID=$!
