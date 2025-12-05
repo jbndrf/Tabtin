@@ -48,6 +48,7 @@ function createProjectDataStore() {
 
 	let unsubscribeBatches: (() => void) | null = null;
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
+	let isLoadingBatches = false; // Guard against concurrent loads
 
 	async function loadProject(projectId: string, userId: string, force = false) {
 		const currentState = get({ subscribe });
@@ -99,8 +100,13 @@ function createProjectDataStore() {
 	}
 
 	async function loadBatchesAndStats(projectId: string) {
+		// Guard against concurrent loads
+		if (isLoadingBatches) {
+			return;
+		}
+		isLoadingBatches = true;
+
 		try {
-			console.log('[ProjectData] Loading batches and stats for project:', projectId);
 			// Load statistics and batches in parallel with unique request keys to prevent auto-cancellation
 			const [pendingCount, processingCount, reviewCount, approvedCount, failedCount, batchList] =
 				await Promise.all([
@@ -180,6 +186,8 @@ function createProjectDataStore() {
 			}));
 		} catch (error) {
 			console.error('Failed to load batches and stats:', error);
+		} finally {
+			isLoadingBatches = false;
 		}
 	}
 
@@ -201,10 +209,8 @@ function createProjectDataStore() {
 		// Poll every 3 seconds for processing updates
 		pollInterval = setInterval(() => {
 			const currentState = get({ subscribe });
-			console.log('[ProjectData] Polling - processing:', currentState.stats.processing, 'pending:', currentState.stats.pending);
 			// Only poll if we have processing or pending items
 			if (currentState.stats.processing > 0 || currentState.stats.pending > 0) {
-				console.log('[ProjectData] Reloading batches due to active processing/pending items');
 				loadBatchesAndStats(projectId);
 			}
 		}, 3000);

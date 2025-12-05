@@ -161,7 +161,16 @@
 		});
 	}
 
-	async function loadProjectData(projectId: string) {
+	// Track last loaded project to prevent duplicate loads
+	let lastLoadedProjectId: string | null = null;
+
+	async function loadProjectData(projectId: string, force = false) {
+		// Prevent duplicate loads for the same project
+		if (!force && lastLoadedProjectId === projectId) {
+			return;
+		}
+		lastLoadedProjectId = projectId;
+
 		try {
 			// Clear extraction rows cache when reloading project data
 			batchExtractionRows.clear();
@@ -169,8 +178,8 @@
 			expandedBatches.clear();
 			expandedBatches = new Set();
 
-			// Load project data from store (force reload when projectId changes)
-			await projectData.loadProject(projectId, $currentUser?.id || '', true);
+			// Load project data from store
+			await projectData.loadProject(projectId, $currentUser?.id || '', force);
 
 			if ($currentProject?.settings?.columns) {
 				columns = $currentProject.settings.columns;
@@ -206,16 +215,20 @@
 		const pendingBatchIds = new Set(batches.filter(b => b.status === 'pending').map(b => b.id));
 
 		// Remove cached data for batches that are now pending (being reprocessed)
+		let hasChanges = false;
 		for (const batchId of batchExtractionRows.keys()) {
 			if (!currentBatchIds.has(batchId) || pendingBatchIds.has(batchId)) {
 				batchExtractionRows.delete(batchId);
 				expandedBatches.delete(batchId);
+				hasChanges = true;
 			}
 		}
 
-		// Trigger reactivity
-		batchExtractionRows = new Map(batchExtractionRows);
-		expandedBatches = new Set(expandedBatches);
+		// Only trigger reactivity if something actually changed
+		if (hasChanges) {
+			batchExtractionRows = new Map(batchExtractionRows);
+			expandedBatches = new Set(expandedBatches);
+		}
 	});
 
 	async function cancelProcessing() {
