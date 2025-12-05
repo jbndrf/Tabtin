@@ -6,9 +6,8 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: pocketbase-backend
-    environment:
-      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL}
-      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - ./data/pb_data:/pb/pb_data
     ports:
@@ -28,15 +27,13 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        # Use empty or root path since nginx proxies all PocketBase requests
         - PUBLIC_POCKETBASE_URL=${PUBLIC_POCKETBASE_URL:-}
     container_name: sveltekit-frontend
+    env_file:
+      - .env
     environment:
       - DOCKER_ENV=true
-      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL}
-      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD}
       - POCKETBASE_URL=http://backend:8090
-      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
     ports:
       - "80:80"
     depends_on:
