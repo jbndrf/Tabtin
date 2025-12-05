@@ -204,6 +204,20 @@ export async function convertPdfToImages(
 }
 
 /**
+ * Convert PDF to images using a worker thread (non-blocking)
+ * Use this for background processing to avoid blocking the main event loop
+ */
+export async function convertPdfToImagesAsync(
+	pdfBuffer: Buffer,
+	fileName: string,
+	options: PdfConversionOptions = {}
+): Promise<ConvertedPage[]> {
+	const { convertPdfInWorker, deserializeWorkerPages } = await import('./pdf-worker.js');
+	const workerPages = await convertPdfInWorker(pdfBuffer, fileName, options);
+	return deserializeWorkerPages(workerPages);
+}
+
+/**
  * Check if a file is a PDF by its name
  */
 export function isPdfFile(fileName: string): boolean {

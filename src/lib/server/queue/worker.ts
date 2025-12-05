@@ -4,7 +4,7 @@ import PocketBase from 'pocketbase';
 import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
-import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
+import { convertPdfToImagesAsync, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
 import { buildPromptTemplate, MULTI_ROW_ADDON } from '$lib/prompt-presets';
 
 export class QueueWorker {
@@ -200,8 +200,8 @@ export class QueueWorker {
 					const arrayBuffer = await blob.arrayBuffer();
 					const buffer = Buffer.from(arrayBuffer);
 
-					// Convert PDF to images using project settings
-					const convertedPages = await convertPdfToImages(buffer, img.image, pdfOptions);
+					// Convert PDF to images using worker thread (non-blocking)
+					const convertedPages = await convertPdfToImagesAsync(buffer, img.image, pdfOptions);
 
 					// Add each page as a separate image
 					for (const page of convertedPages) {
@@ -272,7 +272,8 @@ export class QueueWorker {
 				});
 
 				if (!response.ok) {
-					throw new Error(`API request failed: ${response.statusText}`);
+					const errorBody = await response.text();
+					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
 				}
 
 				return response.json();
@@ -534,7 +535,8 @@ export class QueueWorker {
 				});
 
 				if (!response.ok) {
-					throw new Error(`API request failed: ${response.statusText}`);
+					const errorBody = await response.text();
+					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
 				}
 
 				return response.json();

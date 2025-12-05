@@ -29,7 +29,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		console.log('[cancel endpoint] Authenticating with PocketBase');
 		const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
 		const pb = new PocketBase(pocketbaseUrl);
-		await pb.admins.authWithPassword(
+		await pb.collection('_superusers').authWithPassword(
 			privateEnv.POCKETBASE_ADMIN_EMAIL || '',
 			privateEnv.POCKETBASE_ADMIN_PASSWORD || ''
 		);
