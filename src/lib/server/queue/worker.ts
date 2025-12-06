@@ -5,7 +5,12 @@ import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
 import { convertPdfToImagesAsync, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
-import { buildPromptTemplate, MULTI_ROW_ADDON } from '$lib/prompt-presets';
+import { buildModularPrompt } from '$lib/prompt-presets';
+import { withFeatureFlagDefaults, createExtractionResult, type ExtractionFeatureFlags, type ExtractionResultInput } from '$lib/types/extraction';
+import { getBboxOrder } from '$lib/utils/coordinates';
+import { findColumnByKeyOrName } from '$lib/utils/column-matcher';
+import { BatchStatus } from '$lib/constants/batch-status';
+import { decode as decodeToon } from '@toon-format/toon';
 
 export class QueueWorker {
 	private queueManager: QueueManager;
@@ -85,7 +90,7 @@ export class QueueWorker {
 					if (!hasActiveJob) {
 						// No active job - reset batch to pending
 						await this.pb.collection('image_batches').update(batch.id, {
-							status: 'pending'
+							status: BatchStatus.PENDING
 						});
 						console.log(`[Queue] Reset orphaned batch ${batch.id} to pending`);
 					}
@@ -159,7 +164,7 @@ export class QueueWorker {
 
 		// Update batch status to processing
 		await this.pb.collection('image_batches').update(batchId, {
-			status: 'processing',
+			status: BatchStatus.PROCESSING,
 			processing_started: new Date().toISOString()
 		});
 
@@ -223,15 +228,12 @@ export class QueueWorker {
 				}
 			}
 
-			// Generate prompt
-			const bboxOrder = this.getBboxOrder(settings.coordinateFormat);
-			const multiRowEnabled = settings.multiRowExtraction || false;
-			const prompt = this.generatePrompt(
-				settings.columns,
-				settings.coordinateFormat,
-				bboxOrder,
-				multiRowEnabled
-			);
+			// Extract feature flags from settings
+			const featureFlags = withFeatureFlagDefaults(settings.featureFlags);
+
+			// Generate prompt using modular builder
+			const bboxOrder = getBboxOrder(settings.coordinateFormat);
+			const prompt = this.generatePrompt(settings.columns, featureFlags, bboxOrder);
 
 			// Build content array with images and extracted text
 			const contentArray: any[] = [{ type: 'text', text: prompt }];
@@ -252,102 +254,15 @@ export class QueueWorker {
 				}
 			});
 
-			// Call LLM API using connection pool
-			// Use AbortController with configurable timeout (default 10 minutes)
-			const timeoutMinutes = settings.requestTimeout ?? 10;
-			const result = await this.connectionPool.execute(async () => {
-				const controller = new AbortController();
-				const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
+			// Call LLM API using unified method
+			const result = await this.callLlmApi(contentArray, settings);
 
-				try {
-					const response = await fetch(settings.endpoint, {
-						method: 'POST',
-						headers: {
-							Authorization: `Bearer ${settings.apiKey}`,
-							'Content-Type': 'application/json'
-						},
-						body: JSON.stringify({
-							model: settings.modelName,
-							messages: [
-								{
-									role: 'user',
-									content: contentArray
-								}
-							]
-						}),
-						signal: controller.signal
-					});
-
-					if (!response.ok) {
-						const errorBody = await response.text();
-						throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
-					}
-
-					return response.json();
-				} finally {
-					clearTimeout(timeoutId);
-				}
-			});
-
-			// Parse response
-			let content = result.choices[0].message.content;
-			content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-			console.log('=== LLM Response Debugging ===');
-			console.log('Raw content:', content);
-
-			let parsedData = JSON.parse(content);
-			console.log('Parsed data type:', Array.isArray(parsedData) ? 'array' : typeof parsedData);
-			console.log('Parsed data keys:', Object.keys(parsedData));
-			console.log('Available columns:', settings.columns.map((c: any) => ({ id: c.id, name: c.name })));
-
-			// Check if the response is wrapped in an "extractions" property
-			if (parsedData && typeof parsedData === 'object' && 'extractions' in parsedData) {
-				console.log('Detected wrapped format with "extractions" key');
-				parsedData = parsedData.extractions;
-				console.log('Unwrapped to:', Array.isArray(parsedData) ? `array with ${parsedData.length} items` : typeof parsedData);
-			}
-
-			// Check for Gemini simple format
-			if (this.isGeminiSimpleFormat(parsedData)) {
-				console.log('Detected format: Gemini simple format');
-				parsedData = this.transformGeminiFormat(parsedData, settings.columns);
-				console.log('Transformed extractions count:', parsedData.length);
-			}
-			// Check for mixed format (object with column data mixed with metadata)
-			else if (!Array.isArray(parsedData) && typeof parsedData === 'object') {
-				console.log('Detected format: Mixed format');
-				parsedData = this.transformMixedFormat(parsedData, settings.columns);
-				console.log('Transformed extractions count:', parsedData.length);
-			}
-			// Check if already in array format
-			else if (Array.isArray(parsedData)) {
-				console.log('Detected format: Array of extractions');
-				console.log('Array length:', parsedData.length);
-
-				// Check if array items are in mixed format and need transformation
-				if (parsedData.length > 0 && parsedData[0] && !parsedData[0].column_id) {
-					console.log('Array items need transformation (no column_id found)');
-					const transformed = [];
-					for (const item of parsedData) {
-						const result = this.transformMixedFormat(item, settings.columns);
-						transformed.push(...result);
-					}
-					parsedData = transformed;
-					console.log('Transformed array to', parsedData.length, 'extractions');
-				}
-
-				console.log('Final extractions count:', parsedData.length);
-			}
-			else {
-				console.log('Unknown format detected!');
-			}
-
-			console.log('Final parsedData:', JSON.stringify(parsedData, null, 2));
-			console.log('=== End Debugging ===');
+			// Parse and transform LLM response using unified method
+			const rawContent = result.choices[0].message.content;
+			const parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags);
 
 			// Always use multi-row parsing (single-row is just multi-row with one item)
-			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns);
+			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
 			console.log(`Parsed ${extractedRows.length} rows from LLM response`);
 
 			// Create extraction_rows records using batch API for better performance
@@ -359,7 +274,7 @@ export class QueueWorker {
 					project: projectId,
 					row_index: rowIndex + 1, // 1-based indexing (PocketBase treats 0 as blank)
 					row_data: extractedRows[rowIndex],
-					status: 'review'
+					status: BatchStatus.REVIEW
 				});
 			}
 
@@ -374,52 +289,43 @@ export class QueueWorker {
 
 			// Update batch with metadata (keep processed_data for backward compatibility during transition)
 			await this.pb.collection('image_batches').update(batchId, {
-				status: 'review',
+				status: BatchStatus.REVIEW,
 				processed_data: { extractions: parsedData }, // Keep for backward compatibility
 				row_count: extractedRows.length,
 				processing_completed: new Date().toISOString()
 			});
 
-			// Record metrics
-			const endTime = Date.now();
-			await this.pb.collection('processing_metrics').create({
-				batchId: String(batchId),
-				projectId: String(projectId),
+			// Record success metrics
+			await this.recordMetrics({
+				batchId,
+				projectId,
 				jobType: 'process_batch',
-				startTime: new Date(startTime).toISOString(),
-				endTime: new Date(endTime).toISOString(),
-				durationMs: Number(endTime - startTime),
+				startTime,
+				endTime: Date.now(),
 				status: 'success',
 				imageCount: images.length,
 				extractionCount: parsedData.length,
-				modelUsed: String(settings.modelName),
+				modelUsed: settings.modelName,
 				tokensUsed: result.usage?.total_tokens || null
 			});
 		} catch (error: any) {
 			// Mark batch as failed
 			await this.pb.collection('image_batches').update(batchId, {
-				status: 'failed',
+				status: BatchStatus.FAILED,
 				error_message: error.message
 			});
 
 			// Record failure metrics
-			const endTime = Date.now();
-			try {
-				await this.pb.collection('processing_metrics').create({
-					batchId: String(batchId),
-					projectId: String(projectId),
-					jobType: 'process_batch',
-					startTime: new Date(startTime).toISOString(),
-					endTime: new Date(endTime).toISOString(),
-					durationMs: Number(endTime - startTime),
-					status: 'failed',
-					errorMessage: String(error?.message || 'Unknown error'),
-					imageCount: images?.length || 0
-				});
-			} catch (metricsError: any) {
-				console.error('Failed to create failure metrics:', metricsError);
-				console.error('Metrics error details:', JSON.stringify(metricsError.response || metricsError, null, 2));
-			}
+			await this.recordMetrics({
+				batchId,
+				projectId,
+				jobType: 'process_batch',
+				startTime,
+				endTime: Date.now(),
+				status: 'failed',
+				imageCount: images?.length || 0,
+				errorMessage: error?.message || 'Unknown error'
+			});
 
 			throw error;
 		}
@@ -445,7 +351,7 @@ export class QueueWorker {
 
 			// Reset batch to pending and clear all processing-related data
 			await this.pb.collection('image_batches').update(batchId, {
-				status: 'pending',
+				status: BatchStatus.PENDING,
 				processed_data: null,
 				row_count: null,
 				processing_completed: null,
@@ -466,6 +372,9 @@ export class QueueWorker {
 			// Load project and batch
 			const project = await this.pb.collection('projects').getOne(projectId);
 			const settings = project.settings;
+
+			// Extract feature flags from settings
+			const featureFlags = withFeatureFlagDefaults(settings.featureFlags);
 
 			const batch = await this.pb.collection('image_batches').getOne(batchId, {
 				expand: 'images'
@@ -519,102 +428,21 @@ export class QueueWorker {
 				settings.coordinateFormat
 			);
 
-			// Call LLM API
-			// Use AbortController with configurable timeout (default 10 minutes)
-			const timeoutMinutes = settings.requestTimeout ?? 10;
-			const result = await this.connectionPool.execute(async () => {
-				const controller = new AbortController();
-				const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
+			// Build content array for redo request
+			const redoContent = [
+				{ type: 'text', text: prompt },
+				...croppedImages.map((url) => ({
+					type: 'image_url',
+					image_url: { url }
+				}))
+			];
 
-				try {
-					const response = await fetch(settings.endpoint, {
-						method: 'POST',
-						headers: {
-							Authorization: `Bearer ${settings.apiKey}`,
-							'Content-Type': 'application/json'
-						},
-						body: JSON.stringify({
-							model: settings.modelName,
-							messages: [
-								{
-									role: 'user',
-									content: [
-										{ type: 'text', text: prompt },
-										...croppedImages.map((url) => ({
-											type: 'image_url',
-											image_url: { url }
-										}))
-									]
-								}
-							]
-						}),
-						signal: controller.signal
-					});
+			// Call LLM API using unified method
+			const result = await this.callLlmApi(redoContent, settings);
 
-					if (!response.ok) {
-						const errorBody = await response.text();
-						throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
-					}
-
-					return response.json();
-				} finally {
-					clearTimeout(timeoutId);
-				}
-			});
-
-			// Parse response
-			let content = result.choices[0].message.content;
-			content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-			console.log('=== Redo LLM Response Debugging ===');
-			console.log('Raw content:', content);
-
-			let redoExtractions = JSON.parse(content);
-			console.log('Parsed data type:', Array.isArray(redoExtractions) ? 'array' : typeof redoExtractions);
-			console.log('Parsed data keys:', Object.keys(redoExtractions));
-
-			// Check if the response is wrapped in an "extractions" property
-			if (redoExtractions && typeof redoExtractions === 'object' && 'extractions' in redoExtractions) {
-				console.log('Detected wrapped format with "extractions" key');
-				redoExtractions = redoExtractions.extractions;
-				console.log('Unwrapped to:', Array.isArray(redoExtractions) ? `array with ${redoExtractions.length} items` : typeof redoExtractions);
-			}
-
-			// Check for Gemini simple format
-			if (this.isGeminiSimpleFormat(redoExtractions)) {
-				console.log('Detected format: Gemini simple format');
-				redoExtractions = this.transformGeminiFormat(redoExtractions, redoColumns);
-				console.log('Transformed extractions count:', redoExtractions.length);
-			}
-			// Check for mixed format (object with column data mixed with metadata)
-			else if (!Array.isArray(redoExtractions) && typeof redoExtractions === 'object') {
-				console.log('Detected format: Mixed format');
-				redoExtractions = this.transformMixedFormat(redoExtractions, redoColumns);
-				console.log('Transformed extractions count:', redoExtractions.length);
-			}
-			// Check if already in array format
-			else if (Array.isArray(redoExtractions)) {
-				console.log('Detected format: Array of extractions');
-				console.log('Array length:', redoExtractions.length);
-
-				// Check if array items are in mixed format and need transformation
-				if (redoExtractions.length > 0 && redoExtractions[0] && !redoExtractions[0].column_id) {
-					console.log('Array items need transformation (no column_id found)');
-					const transformed = [];
-					for (const item of redoExtractions) {
-						const result = this.transformMixedFormat(item, redoColumns);
-						transformed.push(...result);
-					}
-					redoExtractions = transformed;
-					console.log('Transformed array to', redoExtractions.length, 'extractions');
-				}
-			}
-			else {
-				console.log('Unknown format detected!');
-			}
-
-			console.log('Final redoExtractions:', JSON.stringify(redoExtractions, null, 2));
-			console.log('=== End Redo Debugging ===');
+			// Parse and transform LLM response using unified method
+			const rawContent = result.choices[0].message.content;
+			let redoExtractions = this.parseAndTransformLLMResponse(rawContent, redoColumns, featureFlags);
 
 			// Ensure redoExtractions is an array
 			if (!Array.isArray(redoExtractions)) {
@@ -655,60 +483,45 @@ export class QueueWorker {
 			// Merge extractions
 			const mergedExtractions = [...correctExtractions, ...redoExtractions];
 
-			// NEW: Update only the specific row
+			// Update only the specific row
 			await this.pb.collection('extraction_rows').update(existingRow.id, {
 				row_data: mergedExtractions,
-				status: 'review'
+				status: BatchStatus.REVIEW
 			});
 
 			// Also update batch (backward compatibility)
-			// Note: For multi-row batches, this doesn't fully represent all rows, but kept for transition
 			await this.pb.collection('image_batches').update(batchId, {
-				status: 'review',
+				status: BatchStatus.REVIEW,
 				redo_processed_at: new Date().toISOString()
 			});
 
 			console.log(`Updated extraction_row ${existingRow.id} with ${mergedExtractions.length} total extractions`);
 
-			// Record metrics
-			const endTime = Date.now();
-			const metricsData = {
-				batchId: String(batchId),
-				projectId: String(projectId),
+			// Record success metrics
+			await this.recordMetrics({
+				batchId,
+				projectId,
 				jobType: 'process_redo',
-				startTime: new Date(startTime).toISOString(),
-				endTime: new Date(endTime).toISOString(),
-				durationMs: Number(endTime - startTime),
+				startTime,
+				endTime: Date.now(),
 				status: 'success',
 				imageCount: croppedImages.length,
 				extractionCount: redoExtractions.length,
-				modelUsed: String(settings.modelName),
+				modelUsed: settings.modelName,
 				tokensUsed: result.usage?.total_tokens || null
-			};
-			console.log('Creating processing_metrics with data:', JSON.stringify(metricsData, null, 2));
-			await this.pb.collection('processing_metrics').create(metricsData);
+			});
 		} catch (error: any) {
 			// Record failure metrics
-			const endTime = Date.now();
-			const failureMetrics = {
-				batchId: String(batchId),
-				projectId: String(projectId),
+			await this.recordMetrics({
+				batchId,
+				projectId,
 				jobType: 'process_redo',
-				startTime: new Date(startTime).toISOString(),
-				endTime: new Date(endTime).toISOString(),
-				durationMs: Number(endTime - startTime),
+				startTime,
+				endTime: Date.now(),
 				status: 'failed',
-				errorMessage: String(error?.message || 'Unknown error'),
-				imageCount: 0
-			};
-			console.log('Creating failure metrics with data:', JSON.stringify(failureMetrics, null, 2));
-
-			try {
-				await this.pb.collection('processing_metrics').create(failureMetrics);
-			} catch (metricsError: any) {
-				console.error('Failed to create failure metrics:', metricsError);
-				console.error('Metrics error details:', JSON.stringify(metricsError.response || metricsError, null, 2));
-			}
+				imageCount: 0,
+				errorMessage: error?.message || 'Unknown error'
+			});
 
 			throw error;
 		}
@@ -722,56 +535,16 @@ export class QueueWorker {
 		return `data:${mimeType};base64,${base64}`;
 	}
 
-	private generatePrompt(columns: any[], coordinateFormat: string, bboxOrder: string = '[x1, y1, x2, y2]', multiRowEnabled: boolean = false): string {
-		// Build the base template, conditionally adding multi-row instructions
-		let prompt = buildPromptTemplate(multiRowEnabled);
-
-		// Generate fields section
-		let fieldsSection = '';
-		columns.forEach((col, index) => {
-			fieldsSection += `Field ${index + 1}:\n`;
-			fieldsSection += `  ID: "${col.id}"\n`;
-			fieldsSection += `  Name: "${col.name}"\n`;
-			fieldsSection += `  Type: ${col.type}\n`;
-			if (col.description) {
-				fieldsSection += `  Description: ${col.description}\n`;
-			}
-			if (col.allowedValues) {
-				fieldsSection += `  Allowed values: ${col.allowedValues}\n`;
-			}
-			if (col.regex) {
-				fieldsSection += `  Validation pattern: ${col.regex}\n`;
-			}
-			fieldsSection += '\n';
+	private generatePrompt(
+		columns: any[],
+		featureFlags: ExtractionFeatureFlags,
+		bboxOrder: string = '[x1, y1, x2, y2]'
+	): string {
+		return buildModularPrompt({
+			columns,
+			featureFlags,
+			bboxOrder
 		});
-
-		// Generate field examples section with actual column IDs/names
-		// Include row_index only when multi-row is enabled
-		let fieldExamples = '';
-		columns.forEach((col, index) => {
-			const isLast = index === columns.length - 1;
-			fieldExamples += '    {\n';
-			if (multiRowEnabled) {
-				fieldExamples += '      "row_index": 0,\n';
-			}
-			fieldExamples += `      "column_id": "${col.id}",\n`;
-			fieldExamples += `      "column_name": "${col.name}",\n`;
-			fieldExamples += '      "value": "extracted value here",\n';
-			fieldExamples += '      "image_index": 0,\n';
-			fieldExamples += `      "bbox_2d": ${bboxOrder},\n`;
-			fieldExamples += '      "confidence": 0.95\n';
-			fieldExamples += `    }${isLast ? '' : ','}\n`;
-		});
-
-		// Replace placeholders
-		prompt = prompt
-			.replace(/\{\{FIELDS\}\}/g, fieldsSection.trim())
-			.replace(/\{\{FIELD_EXAMPLES\}\}/g, fieldExamples)
-			.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
-
-		prompt += `\n\nCoordinate Format: ${coordinateFormat}`;
-
-		return prompt;
 	}
 
 	private generateRedoPrompt(
@@ -898,7 +671,7 @@ export class QueueWorker {
 		return true;
 	}
 
-	private transformGeminiFormat(data: any, columns: any[]): any[] {
+	private transformGeminiFormat(data: any, columns: any[], featureFlags: ExtractionFeatureFlags): any[] {
 		const extractions: any[] = [];
 
 		console.log('--- transformGeminiFormat Debug ---');
@@ -906,23 +679,21 @@ export class QueueWorker {
 		console.log('Input columns:', columns.map(c => ({ id: c.id, name: c.name })));
 
 		for (const [key, value] of Object.entries(data)) {
-			// Find matching column (case-insensitive matching)
-			const column = columns.find((c) => {
-				const nameMatch = c.name.toLowerCase() === key.toLowerCase();
-				const idMatch = c.id === key;
-				return nameMatch || idMatch;
-			});
+			const column = findColumnByKeyOrName(columns, key);
 
 			if (column) {
 				console.log(`Matched key "${key}" to column "${column.name}" (${column.id})`);
-				extractions.push({
+				// Gemini simple format doesn't include bbox/confidence, so we pass null
+				const extraction = createExtractionResult({
 					column_id: column.id,
 					column_name: column.name,
-					value: value,
+					value: value as string | null,
 					image_index: 0,
-					bbox_2d: [0, 0, 1000, 1000],
-					confidence: 0.9
-				});
+					bbox_2d: null,
+					confidence: null
+				}, featureFlags);
+
+				extractions.push(extraction);
 			} else {
 				console.log(`No matching column found for key: "${key}"`);
 			}
@@ -934,7 +705,7 @@ export class QueueWorker {
 		return extractions;
 	}
 
-	private transformMixedFormat(data: any, columns: any[]): any[] {
+	private transformMixedFormat(data: any, columns: any[], featureFlags: ExtractionFeatureFlags): any[] {
 		const extractions: any[] = [];
 
 		console.log('--- transformMixedFormat Debug ---');
@@ -947,29 +718,21 @@ export class QueueWorker {
 			const fieldName = data.field_name;
 			const fieldValue = data.value;
 
-			// Extract metadata
-			const metadata = {
-				image_index: data.image_index ?? 0,
-				bbox_2d: data.bbox_2d ?? [0, 0, 1000, 1000],
-				confidence: data.confidence ?? 0.9
-			};
-			console.log('Extracted metadata:', metadata);
-
-			// Find matching column for field_name
-			const column = columns.find((c) => {
-				const nameMatch = c.name.toLowerCase() === fieldName.toLowerCase();
-				const idMatch = c.id === fieldName;
-				return nameMatch || idMatch;
-			});
+			const column = findColumnByKeyOrName(columns, fieldName);
 
 			if (column) {
 				console.log(`Matched field_name "${fieldName}" to column "${column.name}" (${column.id})`);
-				extractions.push({
+				const extraction = createExtractionResult({
 					column_id: column.id,
 					column_name: column.name,
 					value: fieldValue,
-					...metadata
-				});
+					image_index: data.image_index ?? 0,
+					bbox_2d: data.bbox_2d ?? null,
+					confidence: data.confidence ?? null,
+					row_index: data.row_index
+				}, featureFlags);
+
+				extractions.push(extraction);
 			} else {
 				console.log(`No matching column found for field_name: "${fieldName}"`);
 			}
@@ -981,7 +744,7 @@ export class QueueWorker {
 
 		// Original logic for direct key-value format (Qwen style)
 		// Extract metadata fields if present
-		const metadataFields = new Set(['bbox_2d', 'confidence', 'image_index']);
+		const metadataFields = new Set(['bbox_2d', 'confidence', 'image_index', 'row_index']);
 		const metadata: any = {};
 
 		// Collect metadata
@@ -1000,23 +763,21 @@ export class QueueWorker {
 				continue;
 			}
 
-			// Find matching column (case-insensitive matching)
-			const column = columns.find((c) => {
-				const nameMatch = c.name.toLowerCase() === key.toLowerCase();
-				const idMatch = c.id === key;
-				return nameMatch || idMatch;
-			});
+			const column = findColumnByKeyOrName(columns, key);
 
 			if (column) {
 				console.log(`Matched key "${key}" to column "${column.name}" (${column.id})`);
-				extractions.push({
+				const extraction = createExtractionResult({
 					column_id: column.id,
 					column_name: column.name,
-					value: value,
+					value: value as string | null,
 					image_index: metadata.image_index ?? 0,
-					bbox_2d: metadata.bbox_2d ?? [0, 0, 1000, 1000],
-					confidence: metadata.confidence ?? 0.9
-				});
+					bbox_2d: metadata.bbox_2d ?? null,
+					confidence: metadata.confidence ?? null,
+					row_index: metadata.row_index
+				}, featureFlags);
+
+				extractions.push(extraction);
 			} else {
 				console.log(`No matching column found for key: "${key}"`);
 			}
@@ -1028,7 +789,7 @@ export class QueueWorker {
 		return extractions;
 	}
 
-	private parseMultiRowResponse(llmResponse: any, columns: any[]): any[][] {
+	private parseMultiRowResponse(llmResponse: any, columns: any[], featureFlags: ExtractionFeatureFlags): any[][] {
 		console.log('=== parseMultiRowResponse Debug ===');
 		console.log('Input type:', Array.isArray(llmResponse) ? 'array' : typeof llmResponse);
 
@@ -1072,14 +833,14 @@ export class QueueWorker {
 			if (!Array.isArray(rows)) {
 				console.log('rows key is not an array, treating as single row');
 				console.log('=== End parseMultiRowResponse Debug ===');
-				return [this.transformMixedFormat(rows, columns)];
+				return [this.transformMixedFormat(rows, columns, featureFlags)];
 			}
 
 			// Process each row
 			const processedRows = rows.map((row: any) => {
 				if (Array.isArray(row)) return row;
 				if (row.fields) return row.fields;
-				return this.transformMixedFormat(row, columns);
+				return this.transformMixedFormat(row, columns, featureFlags);
 			});
 
 			console.log(`Processed ${processedRows.length} rows`);
@@ -1090,11 +851,88 @@ export class QueueWorker {
 		// Unknown format - treat as single row
 		console.log('Detected format: Unknown (treating as single row)');
 		console.log('=== End parseMultiRowResponse Debug ===');
-		return [this.transformMixedFormat(llmResponse, columns)];
+		return [this.transformMixedFormat(llmResponse, columns, featureFlags)];
 	}
 
 	private sleep(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	/**
+	 * Unified LLM API call method
+	 * Handles timeout, abort controller, and error handling
+	 */
+	private async callLlmApi(
+		content: Array<{ type: string; [key: string]: any }>,
+		settings: { endpoint: string; apiKey: string; modelName: string; requestTimeout?: number }
+	): Promise<any> {
+		const timeoutMinutes = settings.requestTimeout ?? 10;
+		return this.connectionPool.execute(async () => {
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
+
+			try {
+				const response = await fetch(settings.endpoint, {
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${settings.apiKey}`,
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({
+						model: settings.modelName,
+						messages: [{ role: 'user', content }]
+					}),
+					signal: controller.signal
+				});
+
+				if (!response.ok) {
+					const errorBody = await response.text();
+					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
+				}
+
+				return response.json();
+			} finally {
+				clearTimeout(timeoutId);
+			}
+		});
+	}
+
+	/**
+	 * Unified metrics recording method
+	 * Handles both success and failure cases
+	 */
+	private async recordMetrics(data: {
+		batchId: string;
+		projectId: string;
+		jobType: 'process_batch' | 'process_redo';
+		startTime: number;
+		endTime: number;
+		status: 'success' | 'failed';
+		imageCount: number;
+		extractionCount?: number;
+		modelUsed?: string;
+		tokensUsed?: number | null;
+		errorMessage?: string;
+	}): Promise<void> {
+		try {
+			await this.pb.collection('processing_metrics').create({
+				batchId: String(data.batchId),
+				projectId: String(data.projectId),
+				jobType: data.jobType,
+				startTime: new Date(data.startTime).toISOString(),
+				endTime: new Date(data.endTime).toISOString(),
+				durationMs: Number(data.endTime - data.startTime),
+				status: data.status,
+				imageCount: data.imageCount,
+				...(data.extractionCount !== undefined && { extractionCount: data.extractionCount }),
+				...(data.modelUsed && { modelUsed: String(data.modelUsed) }),
+				...(data.tokensUsed !== undefined && { tokensUsed: data.tokensUsed }),
+				...(data.errorMessage && { errorMessage: String(data.errorMessage) })
+			});
+		} catch (err: any) {
+			console.error('Failed to create metrics:', err);
+			console.error('Metrics error details:', JSON.stringify(err.response || err, null, 2));
+		}
 	}
 
 	updateConfig(config: Partial<WorkerConfig>): void {
@@ -1112,18 +950,165 @@ export class QueueWorker {
 		return this.connectionPool.getStats();
 	}
 
-	private getBboxOrder(coordinateFormat: string): string {
-		// Map coordinate format to bbox order string for prompt examples
-		switch (coordinateFormat) {
-			case 'normalized_1000_yxyx':
-			case 'normalized_1024_yxyx':
-				return '[y_min, x_min, y_max, x_max]';
-			case 'normalized_1000':
-			case 'normalized_1':
-			case 'pixels':
-			case 'yolo':
-			default:
-				return '[x1, y1, x2, y2]';
+	/**
+	 * Unified LLM response parsing and transformation
+	 * Handles TOON/JSON parsing, format detection, and normalization
+	 */
+	private parseAndTransformLLMResponse(
+		rawContent: string,
+		columns: any[],
+		featureFlags: ExtractionFeatureFlags
+	): any[] {
+		// 1. Clean response (remove markdown fences)
+		let content = rawContent
+			.replace(/```json\n?/g, '')
+			.replace(/```toon\n?/g, '')
+			.replace(/```\n?/g, '')
+			.trim();
+
+		console.log('=== LLM Response Parsing ===');
+		console.log('TOON output enabled:', featureFlags.toonOutput);
+
+		// 2. Parse (TOON with JSON fallback)
+		let parsedData: any;
+		if (featureFlags.toonOutput) {
+			// Check if content looks like TOON format (has array declaration syntax)
+			// Matches both: extractions[N]{fields}: (tabular) and extractions[N]: (YAML-like)
+			if (content.match(/^\w+\[\d+\](\{[^}]+\})?:/m)) {
+				console.log('TOON format detected, using official decoder with count fix...');
+				// Fix array counts before parsing (LLMs often miscount)
+				const fixedContent = this.fixToonArrayCounts(content);
+				// Use official decoder with strict: false for flexibility
+				const decoded = decodeToon(fixedContent, { strict: false });
+				// Extract the extractions array from the decoded object
+				parsedData = (decoded as any)?.extractions ?? decoded;
+			} else {
+				// Content doesn't look like TOON, try JSON
+				console.log('Content does not appear to be TOON format, attempting JSON parse...');
+				parsedData = JSON.parse(content);
+			}
+		} else {
+			parsedData = JSON.parse(content);
 		}
+
+		console.log('Parsed data type:', Array.isArray(parsedData) ? 'array' : typeof parsedData);
+		console.log('Parsed data keys:', typeof parsedData === 'object' && parsedData ? Object.keys(parsedData) : 'N/A');
+
+		// 3. Unwrap if wrapped in "extractions" property
+		if (parsedData && typeof parsedData === 'object' && 'extractions' in parsedData) {
+			console.log('Detected wrapped format with "extractions" key');
+			parsedData = parsedData.extractions;
+		}
+
+		// 4. Normalize format
+		if (this.isGeminiSimpleFormat(parsedData)) {
+			console.log('Detected format: Gemini simple format');
+			parsedData = this.transformGeminiFormat(parsedData, columns, featureFlags);
+		} else if (!Array.isArray(parsedData) && typeof parsedData === 'object') {
+			console.log('Detected format: Mixed format');
+			parsedData = this.transformMixedFormat(parsedData, columns, featureFlags);
+		} else if (Array.isArray(parsedData)) {
+			console.log('Detected format: Array of extractions');
+			// Check if array items need transformation
+			if (parsedData.length > 0 && parsedData[0] && !parsedData[0].column_id) {
+				console.log('Array items need transformation (no column_id found)');
+				const transformed = [];
+				for (const item of parsedData) {
+					const result = this.transformMixedFormat(item, columns, featureFlags);
+					transformed.push(...result);
+				}
+				parsedData = transformed;
+			}
+		}
+
+		// Normalize all extractions to ensure column_id is always a string
+		// This handles TOON/JSON parsing differences where column_id might be number or string
+		if (Array.isArray(parsedData)) {
+			parsedData = parsedData.map(extraction => ({
+				...extraction,
+				column_id: String(extraction.column_id)
+			}));
+		}
+
+		console.log('Final extractions count:', Array.isArray(parsedData) ? parsedData.length : 'not an array');
+		console.log('=== End LLM Response Parsing ===');
+
+		return parsedData;
+	}
+
+	/**
+	 * Fix TOON array count declarations before parsing
+	 * LLMs often miscount (e.g., declaring 3 for 3 rows when there are 18 total items)
+	 * This counts actual items and fixes the header before passing to official decoder
+	 */
+	private fixToonArrayCounts(content: string): string {
+		console.log('=== Fixing TOON Array Counts ===');
+
+		// Find all array declarations: arrayName[count]: or arrayName[count]{fields}:
+		// and fix their counts based on actual content
+		const lines = content.split('\n');
+		const fixedLines: string[] = [];
+
+		let i = 0;
+		while (i < lines.length) {
+			const line = lines[i];
+
+			// Check for array header (with or without field list)
+			// Format 1: extractions[N]{field1,field2}:  (tabular CSV)
+			// Format 2: extractions[N]:  (YAML-like list)
+			const tabularMatch = line.match(/^(\s*)(\w+)\[(\d+)\](\{[^}]+\})?:\s*$/);
+
+			if (tabularMatch) {
+				const [, indent, arrayName, declaredCount, fieldList] = tabularMatch;
+				const isTabular = !!fieldList;
+
+				// Count actual items
+				let actualCount = 0;
+				let j = i + 1;
+
+				if (isTabular) {
+					// Tabular format: count non-empty indented lines (each line is one item)
+					while (j < lines.length) {
+						const dataLine = lines[j];
+						// Data lines are indented more than the header
+						if (dataLine.match(/^\s{2,}/) && dataLine.trim() !== '') {
+							// Stop if we hit another array header or same-level key
+							if (dataLine.match(/^\s*\w+(\[|\:)/)) break;
+							actualCount++;
+						} else if (dataLine.trim() !== '' && !dataLine.startsWith(' ')) {
+							break; // Hit a non-indented line
+						}
+						j++;
+					}
+				} else {
+					// YAML-like list format: count lines starting with "  - "
+					while (j < lines.length) {
+						const dataLine = lines[j];
+						if (dataLine.match(/^\s{2}-\s/)) {
+							actualCount++;
+						} else if (dataLine.trim() !== '' && !dataLine.startsWith(' ')) {
+							break; // Hit a non-indented line (new top-level key)
+						}
+						j++;
+					}
+				}
+
+				// Fix the count if different
+				if (actualCount > 0 && actualCount !== parseInt(declaredCount)) {
+					console.log(`Fixing ${arrayName}: declared ${declaredCount}, actual ${actualCount}`);
+					const fixedHeader = `${indent}${arrayName}[${actualCount}]${fieldList || ''}:`;
+					fixedLines.push(fixedHeader);
+				} else {
+					fixedLines.push(line);
+				}
+			} else {
+				fixedLines.push(line);
+			}
+			i++;
+		}
+
+		const result = fixedLines.join('\n');
+		console.log('=== End Fixing TOON Array Counts ===');
+		return result;
 	}
 }

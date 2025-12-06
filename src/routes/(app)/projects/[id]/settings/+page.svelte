@@ -23,7 +23,9 @@
 	import type { PageData } from './$types';
 	import { setPageActions, clearPageActions } from '$lib/stores/page-actions';
 	import { onDestroy, onMount } from 'svelte';
-	import { PROMPT_PRESETS, getPresetById, DEFAULT_PROMPT_TEMPLATE, buildPromptTemplate, MULTI_ROW_ADDON, type CoordinateFormat } from '$lib/prompt-presets';
+	import { PROMPT_PRESETS, getPresetById, buildModularPrompt, type CoordinateFormat } from '$lib/prompt-presets';
+	import { DEFAULT_FEATURE_FLAGS, withFeatureFlagDefaults, type ExtractionFeatureFlags } from '$lib/types/extraction';
+	import { getBboxOrder } from '$lib/utils/coordinates';
 
 	let { data }: { data: PageData } = $props();
 
@@ -79,8 +81,8 @@
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
 
-	// Extraction mode
-	let multiRowExtraction = $state<boolean>(false);
+	// Extraction feature flags
+	let featureFlags = $state<ExtractionFeatureFlags>({ ...DEFAULT_FEATURE_FLAGS });
 
 	// PDF Processing settings (Advanced)
 	const PDF_DEFAULTS = {
@@ -173,8 +175,8 @@
 			modelName = settings.modelName || '';
 
 			// Load prompt templates
-			promptTemplate = settings.promptTemplate || DEFAULT_PROMPT_TEMPLATE;
-			reviewPromptTemplate = settings.reviewPromptTemplate || DEFAULT_PROMPT_TEMPLATE;
+			promptTemplate = settings.promptTemplate || '';
+			reviewPromptTemplate = settings.reviewPromptTemplate || '';
 			selectedPreset = settings.selectedPreset || 'qwen3vl';
 			coordinateFormat = settings.coordinateFormat || 'pixels';
 
@@ -182,8 +184,8 @@
 			requestsPerMinute = settings.requestsPerMinute || 15;
 			enableParallelRequests = settings.enableParallelRequests || false;
 
-			// Load extraction mode
-			multiRowExtraction = settings.multiRowExtraction || false;
+			// Load extraction feature flags
+			featureFlags = withFeatureFlagDefaults(settings.featureFlags);
 
 			// Load PDF processing settings
 			pdfDpi = settings.pdfDpi ?? PDF_DEFAULTS.dpi;
@@ -216,7 +218,6 @@
 	function applyPreset(presetId: string) {
 		const preset = getPresetById(presetId);
 		if (preset) {
-			promptTemplate = preset.template;
 			coordinateFormat = preset.coordinateFormat;
 			selectedPreset = presetId;
 			toast.success(`Applied ${preset.name} preset`);
@@ -228,7 +229,6 @@
 		if (selectedPreset && !loading) {
 			const preset = getPresetById(selectedPreset);
 			if (preset) {
-				promptTemplate = preset.template;
 				coordinateFormat = preset.coordinateFormat;
 			}
 		}
@@ -350,7 +350,7 @@
 				coordinateFormat,
 				requestsPerMinute,
 				enableParallelRequests,
-				multiRowExtraction,
+				featureFlags,
 				// PDF processing settings
 				pdfDpi,
 				pdfFormat,
@@ -421,70 +421,26 @@
 		}
 	}
 
-	function getBboxOrder(format: CoordinateFormat): string {
-		switch (format) {
-			case 'normalized_1000_yxyx':
-			case 'normalized_1024_yxyx':
-				return '[y_min, x_min, y_max, x_max]';
-			default:
-				return '[x1, y1, x2, y2]';
-		}
-	}
-
 	function generateFullPrompt(): string {
-		// Build template based on multi-row setting
-		let template = buildPromptTemplate(multiRowExtraction);
 		const bboxOrder = getBboxOrder(coordinateFormat);
 
 		if (columns.length === 0) {
-			return template
-				.replace('{{FIELDS}}', '(No fields defined yet. Add columns to see the full prompt.)')
-				.replace('{{FIELD_EXAMPLES}}', '')
-				.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
+			return '(No fields defined yet. Add columns to see the full prompt.)';
 		}
 
-		// Generate fields section
-		let fieldsSection = '';
-		columns.forEach((col, index) => {
-			fieldsSection += `Field ${index + 1}:\n`;
-			fieldsSection += `  ID: "${col.id}"\n`;
-			fieldsSection += `  Name: "${col.name}"\n`;
-			fieldsSection += `  Type: ${col.type}\n`;
-			if (col.description) {
-				fieldsSection += `  Description: ${col.description}\n`;
-			}
-			if (col.allowedValues) {
-				fieldsSection += `  Allowed values: ${col.allowedValues}\n`;
-			}
-			if (col.regex) {
-				fieldsSection += `  Validation pattern: ${col.regex}\n`;
-			}
-			fieldsSection += '\n';
+		// Use the modular prompt builder
+		return buildModularPrompt({
+			columns: columns.map((col, index) => ({
+				id: String(index + 1),
+				name: col.name,
+				type: col.type,
+				description: col.description,
+				allowedValues: col.allowedValues,
+				regex: col.regex
+			})),
+			featureFlags,
+			bboxOrder
 		});
-
-		// Generate field examples section with actual column IDs/names
-		// Include row_index only when multi-row is enabled
-		let fieldExamples = '';
-		columns.forEach((col, index) => {
-			const isLast = index === columns.length - 1;
-			fieldExamples += '    {\n';
-			if (multiRowExtraction) {
-				fieldExamples += '      "row_index": 0,\n';
-			}
-			fieldExamples += `      "column_id": "${col.id}",\n`;
-			fieldExamples += `      "column_name": "${col.name}",\n`;
-			fieldExamples += '      "value": "extracted value here",\n';
-			fieldExamples += '      "image_index": 0,\n';
-			fieldExamples += `      "bbox_2d": ${bboxOrder},\n`;
-			fieldExamples += '      "confidence": 0.95\n';
-			fieldExamples += `    }${isLast ? '' : ','}\n`;
-		});
-
-		// Replace placeholders
-		return template
-			.replace(/\{\{FIELDS\}\}/g, fieldsSection.trim())
-			.replace(/\{\{FIELD_EXAMPLES\}\}/g, fieldExamples)
-			.replace(/\{\{BBOX_FORMAT\}\}/g, bboxOrder);
 	}
 </script>
 
@@ -924,13 +880,93 @@
 
 				<Separator />
 
+				<div>
+					<h3 class="text-lg font-medium mb-2">Extraction Features</h3>
+					<p class="text-sm text-muted-foreground mb-4">Toggle which features are enabled for document extraction.</p>
+				</div>
+
+				<!-- Bounding Boxes Toggle -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="boundingBoxes"
+								bind:checked={featureFlags.boundingBoxes}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="boundingBoxes" class="cursor-pointer">Bounding Boxes</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-1">
+									<p class="text-xs">Extract coordinate regions for each field. Required for visual highlighting in review mode and for redo cropping.</p>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+
+				<!-- Coordinate Format (only shown when bounding boxes enabled) -->
+				{#if featureFlags.boundingBoxes}
+					<div class="space-y-2 ml-6">
+						<Label for="coordinateFormat">Coordinate Format</Label>
+						<select
+							id="coordinateFormat"
+							bind:value={selectedPreset}
+							class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						>
+							{#each Object.values(PROMPT_PRESETS) as preset}
+								<option value={preset.id}>{preset.name} - {preset.coordinateDescription}</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
+
+				<!-- Confidence Scores Toggle -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="confidenceScores"
+								bind:checked={featureFlags.confidenceScores}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="confidenceScores" class="cursor-pointer">Confidence Scores</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-1">
+									<p class="text-xs">Request extraction certainty values (0.0-1.0). Useful for quality review and filtering uncertain extractions.</p>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+
+				<!-- Multi-Row Extraction Toggle -->
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
 						<div class="flex items-center space-x-2">
 							<input
 								type="checkbox"
 								id="multiRowExtraction"
-								bind:checked={multiRowExtraction}
+								bind:checked={featureFlags.multiRowExtraction}
 								class="h-4 w-4 rounded border-input"
 							/>
 							<Label for="multiRowExtraction" class="cursor-pointer">Multi-Row Extraction</Label>
@@ -954,6 +990,43 @@
 										<p class="text-xs">Each image may contain multiple items/transactions/entries. Use this for bank statements, receipts with line items, invoices with multiple products, etc.</p>
 									</div>
 									<p class="text-xs italic">Note: Multilingual content on a single item is NOT treated as multiple rows.</p>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+
+				<!-- TOON Output Format Toggle -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="toonOutput"
+								bind:checked={featureFlags.toonOutput}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="toonOutput" class="cursor-pointer">TOON Output Format</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">JSON (Default)</p>
+										<p class="text-xs">Standard JSON output format. Compatible with all models.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">TOON Format</p>
+										<p class="text-xs">Token-Oriented Object Notation. Reduces output tokens by 40-50%, resulting in faster extraction times with same accuracy.</p>
+									</div>
+									<p class="text-xs italic">TOON is ideal for high-volume extraction where speed matters.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
@@ -1486,7 +1559,7 @@
 		{modelName}
 		{columns}
 		projectDescription={description}
-		{multiRowExtraction}
+		multiRowExtraction={featureFlags.multiRowExtraction}
 		chatHistory={schemaChatHistory}
 		{documentAnalyses}
 		pdfSettings={{ dpi: pdfDpi, format: pdfFormat, quality: pdfQuality, maxWidth: pdfMaxWidth, maxHeight: pdfMaxHeight }}
@@ -1497,7 +1570,7 @@
 			description = newDescription;
 		}}
 		onMultiRowChange={(enabled) => {
-			multiRowExtraction = enabled;
+			featureFlags.multiRowExtraction = enabled;
 		}}
 		onChatHistoryChange={saveChatHistory}
 		onDocumentAnalysesChange={saveDocumentAnalyses}

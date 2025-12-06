@@ -1,3 +1,6 @@
+import type { ExtractionFeatureFlags, ColumnDefinition } from './types/extraction';
+import { encode } from '@toon-format/toon';
+
 export type CoordinateFormat = 'pixels' | 'normalized_1000' | 'normalized_1000_yxyx' | 'normalized_1024_yxyx' | 'normalized_1' | 'yolo';
 
 export interface PromptPreset {
@@ -5,11 +8,18 @@ export interface PromptPreset {
 	name: string;
 	coordinateFormat: CoordinateFormat;
 	coordinateDescription: string;
-	bboxOrder: string; // e.g., "[x1, y1, x2, y2]" or "[y_min, x_min, y_max, x_max]"
+	bboxOrder: string;
 }
 
-// Base template - used for single-row extraction
-const BASE_TEMPLATE = `You are an AI assistant specialized in extracting structured data from images.
+export interface PromptBuilderConfig {
+	columns: ColumnDefinition[];
+	featureFlags: ExtractionFeatureFlags;
+	coordinateFormat?: CoordinateFormat;
+	bboxOrder?: string;
+}
+
+// Core extraction instructions (always included)
+const CORE_INSTRUCTIONS = `You are an AI assistant specialized in extracting structured data from images.
 
 Instructions:
 - Carefully analyze all visible text, labels, and visual elements in the image
@@ -19,48 +29,212 @@ Instructions:
 - Pay attention to units, separators, and formatting requirements in field descriptions
 - If the image contains text in multiple languages, extract from all languages as specified in field descriptions
 
-Return only valid JSON in the exact format specified. Do not include explanations, notes, markdown formatting, or any additional text outside the JSON response.
+Return only valid JSON in the exact format specified. Do not include explanations, notes, markdown formatting, or any additional text outside the JSON response.`;
 
---- FIELDS TO EXTRACT ---
+// Bounding box instructions (conditionally included)
+const BBOX_INSTRUCTIONS = (bboxOrder: string) => `
 
-{{FIELDS}}
+Bounding Box Instructions:
+- bbox_2d coordinates should be normalized to 0-1000 range ${bboxOrder}
+- If a field's information is NOT present, set bbox_2d to [0, 0, 0, 0]`;
 
---- EXPECTED OUTPUT FORMAT ---
+// Confidence score instructions (conditionally included)
+const CONFIDENCE_INSTRUCTIONS = `
 
-Return ONLY valid JSON in this exact structure. CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
+Confidence Score Instructions:
+- Provide a confidence score (0.0 to 1.0) indicating extraction certainty
+- Use 0.9+ for clearly visible, unambiguous text
+- Use 0.5-0.9 for partially visible or ambiguous text
+- Use 0.0-0.5 for guessed or unclear values
+- If a field's information is NOT present, set confidence to 0.0`;
 
-{
-  "extractions": [
-{{FIELD_EXAMPLES}}
-  ]
-}
+// Multi-row instructions (conditionally included)
+const MULTI_ROW_INSTRUCTIONS = `
 
-Important:
-- bbox_2d coordinates should be normalized to 0-1000 range {{BBOX_FORMAT}}
-- If a field's information is NOT present, set value to null, bbox_2d to [0, 0, 0, 0], and confidence to 0.0
-- Do not include any explanations, notes, or text outside the JSON structure`;
-
-// Multi-row addon - appended when multiRowExtraction is enabled
-export const MULTI_ROW_ADDON = `
-
---- MULTI-ROW EXTRACTION ---
-
+MULTI-ROW EXTRACTION:
 CRITICAL: This document may contain MULTIPLE ITEMS/TRANSACTIONS/ENTRIES (e.g., bank statement with multiple transactions, receipt with multiple line items, invoice with multiple products).
 
 Multi-row instructions:
 - Each distinct item/transaction/entry should be extracted as a SEPARATE ROW
 - Add a "row_index" field (starting from 0) to group fields belonging to the same item
 - If the document contains only ONE item, still use row_index: 0
-- Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row
+- Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row`;
 
-Example for document with 3 items:
+// TOON format instructions (conditionally included)
+const TOON_INSTRUCTIONS = `
+
+OUTPUT FORMAT: TOON (Token-Oriented Object Notation)
+You MUST output in TOON format, NOT JSON. TOON is a compact data format with these rules:
+- Arrays declare length and fields: arrayName[COUNT]{field1,field2,...}:
+- Each row uses 2-space indentation with comma-separated values
+- Strings with commas or special chars use quotes
+- null values are written as null
+- Arrays within values use square brackets: [1,2,3,4]`;
+
+function generateFieldsSection(columns: ColumnDefinition[]): string {
+	return columns.map((col, index) => {
+		let field = `Field ${index + 1}:\n`;
+		field += `  ID: "${col.id}"\n`;
+		field += `  Name: "${col.name}"\n`;
+		field += `  Type: ${col.type}`;
+		if (col.description) field += `\n  Description: ${col.description}`;
+		if (col.allowedValues) field += `\n  Allowed values: ${col.allowedValues}`;
+		if (col.regex) field += `\n  Validation pattern: ${col.regex}`;
+		return field;
+	}).join('\n\n');
+}
+
+function generateOutputFormatSection(
+	columns: ColumnDefinition[],
+	featureFlags: ExtractionFeatureFlags,
+	bboxOrder: string
+): string {
+	// Use TOON format if enabled
+	if (featureFlags.toonOutput) {
+		return generateToonOutputFormatSection(columns, featureFlags, bboxOrder);
+	}
+
+	// Default JSON format
+	let format = `Return ONLY valid JSON in this exact structure. CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
+
 {
   "extractions": [
-    { "row_index": 0, "column_id": "1", "column_name": "Field", "value": "Item 1 value", ... },
-    { "row_index": 1, "column_id": "1", "column_name": "Field", "value": "Item 2 value", ... },
-    { "row_index": 2, "column_id": "1", "column_name": "Field", "value": "Item 3 value", ... }
-  ]
-}`;
+`;
+
+	// Generate example for each column
+	format += columns.map((col, index) => {
+		const isLast = index === columns.length - 1;
+		let example = '    {\n';
+
+		if (featureFlags.multiRowExtraction) {
+			example += '      "row_index": 0,\n';
+		}
+
+		example += `      "column_id": "${col.id}",\n`;
+		example += `      "column_name": "${col.name}",\n`;
+		example += '      "value": "extracted value here",\n';
+		example += '      "image_index": 0';
+
+		if (featureFlags.boundingBoxes) {
+			example += `,\n      "bbox_2d": ${bboxOrder}`;
+		}
+
+		if (featureFlags.confidenceScores) {
+			example += ',\n      "confidence": 0.95';
+		}
+
+		example += '\n    }' + (isLast ? '' : ',');
+		return example;
+	}).join('\n');
+
+	format += '\n  ]\n}';
+	return format;
+}
+
+function generateToonOutputFormatSection(
+	columns: ColumnDefinition[],
+	featureFlags: ExtractionFeatureFlags,
+	bboxOrder: string
+): string {
+	// Build sample extraction data to encode as TOON example
+	const sampleExtractions = columns.map((col, index) => {
+		const extraction: Record<string, any> = {};
+
+		if (featureFlags.multiRowExtraction) {
+			extraction.row_index = 0;
+		}
+
+		extraction.column_id = col.id;
+		extraction.column_name = col.name;
+		extraction.value = `sample_value_${index + 1}`;
+		extraction.image_index = 0;
+
+		if (featureFlags.boundingBoxes) {
+			extraction.bbox_2d = [100, 200, 300, 400];
+		}
+
+		if (featureFlags.confidenceScores) {
+			extraction.confidence = 0.95;
+		}
+
+		return extraction;
+	});
+
+	// Generate TOON example using the library
+	const toonExample = encode({ extractions: sampleExtractions });
+
+	let format = `Return ONLY valid TOON (NOT JSON). CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
+
+TOON Example with ${columns.length} field(s):
+\`\`\`
+${toonExample}
+\`\`\`
+
+Important TOON rules:
+- The [${columns.length}] declares the array length - adjust based on actual extraction count
+- Each indented line is one extraction (2 spaces)
+- Values are comma-separated in field order
+- Use quotes for values containing commas
+- Use null for missing values`;
+
+	return format;
+}
+
+function generateImportantNotes(featureFlags: ExtractionFeatureFlags): string {
+	let notes = '\n\nImportant:';
+
+	if (featureFlags.boundingBoxes) {
+		notes += '\n- If a field\'s information is NOT present, set bbox_2d to [0, 0, 0, 0]';
+	}
+
+	if (featureFlags.confidenceScores) {
+		notes += '\n- If a field\'s information is NOT present, set confidence to 0.0';
+	}
+
+	notes += '\n- If a field\'s value is not visible, set value to null';
+	notes += '\n- Do not include any explanations, notes, or text outside the JSON structure';
+
+	return notes;
+}
+
+/**
+ * Build a complete prompt based on feature flags and columns
+ */
+export function buildModularPrompt(config: PromptBuilderConfig): string {
+	const { columns, featureFlags, bboxOrder = '[x1, y1, x2, y2]' } = config;
+
+	let prompt = CORE_INSTRUCTIONS;
+
+	// Conditionally add feature-specific instructions
+	if (featureFlags.boundingBoxes) {
+		prompt += BBOX_INSTRUCTIONS(bboxOrder);
+	}
+
+	if (featureFlags.confidenceScores) {
+		prompt += CONFIDENCE_INSTRUCTIONS;
+	}
+
+	if (featureFlags.multiRowExtraction) {
+		prompt += MULTI_ROW_INSTRUCTIONS;
+	}
+
+	if (featureFlags.toonOutput) {
+		prompt += TOON_INSTRUCTIONS;
+	}
+
+	// Add fields section
+	prompt += '\n\n--- FIELDS TO EXTRACT ---\n\n';
+	prompt += generateFieldsSection(columns);
+
+	// Add expected output format
+	prompt += '\n\n--- EXPECTED OUTPUT FORMAT ---\n\n';
+	prompt += generateOutputFormatSection(columns, featureFlags, bboxOrder);
+
+	// Add final important notes
+	prompt += generateImportantNotes(featureFlags);
+
+	return prompt;
+}
 
 export const PROMPT_PRESETS: Record<string, PromptPreset> = {
 	qwen3vl: {
@@ -79,19 +253,10 @@ export const PROMPT_PRESETS: Record<string, PromptPreset> = {
 	}
 };
 
-export const DEFAULT_PROMPT_TEMPLATE = BASE_TEMPLATE;
-
 export function getPresetById(id: string): PromptPreset | null {
 	return PROMPT_PRESETS[id] || null;
 }
 
 export function getAllPresets(): PromptPreset[] {
 	return Object.values(PROMPT_PRESETS);
-}
-
-export function buildPromptTemplate(multiRowEnabled: boolean): string {
-	if (multiRowEnabled) {
-		return BASE_TEMPLATE + MULTI_ROW_ADDON;
-	}
-	return BASE_TEMPLATE;
 }

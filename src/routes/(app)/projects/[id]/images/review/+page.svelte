@@ -19,8 +19,8 @@
 		column_name: string;
 		value: string | null;
 		image_index: number;
-		bbox_2d: [number, number, number, number];
-		confidence: number;
+		bbox_2d?: [number, number, number, number];
+		confidence?: number;
 		redone?: boolean;
 	}
 
@@ -499,7 +499,7 @@
 		return null;
 	}
 
-	function getColumnValue(columnId: string): { value: string | null; confidence: number; redone?: boolean } | null {
+	function getColumnValue(columnId: string): { value: string | null; confidence?: number; redone?: boolean } | null {
 		const allExtractions = getAllExtractions();
 		const column = columns.find(c => c.id === columnId);
 		// Match by column_id first, then fall back to column_name if LLM used different ID format
@@ -627,7 +627,8 @@
 			return actualColId ? !redoColumns.has(actualColId) : true;
 		});
 		extractions.forEach((extraction) => {
-			if (extraction.bbox_2d[0] === 0 && extraction.bbox_2d[1] === 0) return;
+			// Skip if no bbox or bbox is all zeros
+			if (!extraction.bbox_2d || (extraction.bbox_2d[0] === 0 && extraction.bbox_2d[1] === 0)) return;
 
 			// Convert coordinates based on selected format (result is always 0-1 normalized)
 			const normalizedBbox = convertBboxCoordinates(extraction.bbox_2d, sourceWidth, sourceHeight);
@@ -1213,7 +1214,7 @@
 
 	function handleZoomToRegion(columnId: string) {
 		const extraction = getAllExtractions().find(e => e.column_id === columnId);
-		if (!extraction) return;
+		if (!extraction || !extraction.bbox_2d) return;
 
 		const imageIdx = extraction.image_index;
 		const canvas = canvasElements[imageIdx];
@@ -2324,7 +2325,7 @@
 														<span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-bold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
 															Redone
 														</span>
-													{:else if extracted && !isEditing}
+													{:else if extracted && extracted.confidence !== undefined && !isEditing}
 														<span
 															class="shrink-0 rounded-full px-2 py-0.5 text-xs font-bold {extracted.confidence >= 0.8
 																? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
