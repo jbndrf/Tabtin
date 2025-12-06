@@ -1,5 +1,4 @@
 import type { ExtractionFeatureFlags, ColumnDefinition } from './types/extraction';
-import { encode } from '@toon-format/toon';
 
 export type CoordinateFormat = 'pixels' | 'normalized_1000' | 'normalized_1000_yxyx' | 'normalized_1024_yxyx' | 'normalized_1' | 'yolo';
 
@@ -31,12 +30,31 @@ Instructions:
 
 Return only valid JSON in the exact format specified. Do not include explanations, notes, markdown formatting, or any additional text outside the JSON response.`;
 
-// Bounding box instructions (conditionally included)
-const BBOX_INSTRUCTIONS = (bboxOrder: string) => `
+// Bounding box instructions for JSON format
+const BBOX_INSTRUCTIONS_JSON = (bboxOrder: string) => `
 
 Bounding Box Instructions:
 - bbox_2d coordinates should be normalized to 0-1000 range ${bboxOrder}
 - If a field's information is NOT present, set bbox_2d to [0, 0, 0, 0]`;
+
+// Bounding box instructions for TOON format (flattened coordinates)
+const BBOX_INSTRUCTIONS_TOON = (coordFields: string[]) => `
+
+Bounding Box Instructions:
+- Coordinates should be normalized to 0-1000 range
+- Output coordinates as separate fields: ${coordFields.join(', ')}
+- If a field's information is NOT present, set all coordinates to 0`;
+
+/**
+ * Parse bboxOrder string to extract coordinate field names
+ * e.g., "[x1, y1, x2, y2]" -> ["x1", "y1", "x2", "y2"]
+ */
+function parseBboxOrderToFields(bboxOrder: string): string[] {
+	return bboxOrder
+		.replace(/[\[\]]/g, '')
+		.split(',')
+		.map(s => s.trim());
+}
 
 // Confidence score instructions (conditionally included)
 const CONFIDENCE_INSTRUCTIONS = `
@@ -63,13 +81,12 @@ Multi-row instructions:
 // TOON format instructions (conditionally included)
 const TOON_INSTRUCTIONS = `
 
-OUTPUT FORMAT: TOON (Token-Oriented Object Notation)
-You MUST output in TOON format, NOT JSON. TOON is a compact data format with these rules:
-- Arrays declare length and fields: arrayName[COUNT]{field1,field2,...}:
-- Each row uses 2-space indentation with comma-separated values
-- Strings with commas or special chars use quotes
+OUTPUT FORMAT: TOON (Token-Oriented Object Notation) with TAB delimiter
+You MUST output in TOON format, NOT JSON. TOON is a compact tabular format:
+- Header declares array length and fields: arrayName[COUNT]{field1,field2,...}:
+- Each row uses 2-space indentation with TAB-separated values (use actual tab character, not spaces)
 - null values are written as null
-- Arrays within values use square brackets: [1,2,3,4]`;
+- CRITICAL: Use TAB character (\\t) between values, NOT commas - this avoids issues with numbers like 97.502,48`;
 
 function generateFieldsSection(columns: ColumnDefinition[]): string {
 	return columns.map((col, index) => {
@@ -136,32 +153,57 @@ function generateToonOutputFormatSection(
 	featureFlags: ExtractionFeatureFlags,
 	bboxOrder: string
 ): string {
-	// Build sample extraction data to encode as TOON example
-	const sampleExtractions = columns.map((col, index) => {
-		const extraction: Record<string, any> = {};
+	// Build field list for TOON header
+	const fieldList: string[] = [];
+
+	if (featureFlags.multiRowExtraction) {
+		fieldList.push('row_index');
+	}
+
+	fieldList.push('column_id', 'column_name', 'value', 'image_index');
+
+	// For TOON, flatten bbox into separate coordinate fields
+	const coordFields = featureFlags.boundingBoxes ? parseBboxOrderToFields(bboxOrder) : [];
+	if (featureFlags.boundingBoxes) {
+		fieldList.push(...coordFields);
+	}
+
+	if (featureFlags.confidenceScores) {
+		fieldList.push('confidence');
+	}
+
+	// Build TOON header
+	const header = `extractions[${columns.length}]{${fieldList.join(',')}}:`;
+
+	// Build sample rows manually (compact tabular format with TAB delimiter)
+	const sampleRows = columns.map((col, index) => {
+		const values: string[] = [];
 
 		if (featureFlags.multiRowExtraction) {
-			extraction.row_index = 0;
+			values.push('0');
 		}
 
-		extraction.column_id = col.id;
-		extraction.column_name = col.name;
-		extraction.value = `sample_value_${index + 1}`;
-		extraction.image_index = 0;
+		values.push(col.id);
+		values.push(col.name);
+		// Show example value - with tabs, commas in values are safe
+		values.push(index === 0 ? '1.234,56' : `sample_value_${index + 1}`);
+		values.push('0');
 
 		if (featureFlags.boundingBoxes) {
-			extraction.bbox_2d = [100, 200, 300, 400];
+			// Add placeholder coordinate values - use angle brackets so model doesn't copy literally
+			const coordFields = parseBboxOrderToFields(bboxOrder);
+			values.push(...coordFields.map(f => `<${f}>`));
 		}
 
 		if (featureFlags.confidenceScores) {
-			extraction.confidence = 0.95;
+			values.push('0.95');
 		}
 
-		return extraction;
+		// Use TAB as delimiter
+		return '  ' + values.join('\t');
 	});
 
-	// Generate TOON example using the library
-	const toonExample = encode({ extractions: sampleExtractions });
+	const toonExample = header + '\n' + sampleRows.join('\n');
 
 	let format = `Return ONLY valid TOON (NOT JSON). CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
 
@@ -172,19 +214,23 @@ ${toonExample}
 
 Important TOON rules:
 - The [${columns.length}] declares the array length - adjust based on actual extraction count
-- Each indented line is one extraction (2 spaces)
-- Values are comma-separated in field order
-- Use quotes for values containing commas
+- Each indented line is one extraction (2 spaces indent, TAB-separated values)
+- Values are in field order as declared in the header
+- Use TAB character between values (numbers like 97.502,48 are safe with tabs)
 - Use null for missing values`;
 
 	return format;
 }
 
-function generateImportantNotes(featureFlags: ExtractionFeatureFlags): string {
+function generateImportantNotes(featureFlags: ExtractionFeatureFlags, isToon: boolean = false): string {
 	let notes = '\n\nImportant:';
 
 	if (featureFlags.boundingBoxes) {
-		notes += '\n- If a field\'s information is NOT present, set bbox_2d to [0, 0, 0, 0]';
+		if (isToon) {
+			notes += '\n- If a field\'s information is NOT present, set all coordinate fields to 0';
+		} else {
+			notes += '\n- If a field\'s information is NOT present, set bbox_2d to [0, 0, 0, 0]';
+		}
 	}
 
 	if (featureFlags.confidenceScores) {
@@ -192,7 +238,12 @@ function generateImportantNotes(featureFlags: ExtractionFeatureFlags): string {
 	}
 
 	notes += '\n- If a field\'s value is not visible, set value to null';
-	notes += '\n- Do not include any explanations, notes, or text outside the JSON structure';
+
+	if (isToon) {
+		notes += '\n- Do not include any explanations, notes, or text outside the TOON structure';
+	} else {
+		notes += '\n- Do not include any explanations, notes, or text outside the JSON structure';
+	}
 
 	return notes;
 }
@@ -207,7 +258,14 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 
 	// Conditionally add feature-specific instructions
 	if (featureFlags.boundingBoxes) {
-		prompt += BBOX_INSTRUCTIONS(bboxOrder);
+		if (featureFlags.toonOutput) {
+			// TOON uses flattened coordinate fields
+			const coordFields = parseBboxOrderToFields(bboxOrder);
+			prompt += BBOX_INSTRUCTIONS_TOON(coordFields);
+		} else {
+			// JSON uses bbox_2d array
+			prompt += BBOX_INSTRUCTIONS_JSON(bboxOrder);
+		}
 	}
 
 	if (featureFlags.confidenceScores) {
@@ -231,7 +289,7 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 	prompt += generateOutputFormatSection(columns, featureFlags, bboxOrder);
 
 	// Add final important notes
-	prompt += generateImportantNotes(featureFlags);
+	prompt += generateImportantNotes(featureFlags, featureFlags.toonOutput);
 
 	return prompt;
 }

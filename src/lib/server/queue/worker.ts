@@ -259,7 +259,7 @@ export class QueueWorker {
 
 			// Parse and transform LLM response using unified method
 			const rawContent = result.choices[0].message.content;
-			const parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags);
+			const parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags, settings.coordinateFormat);
 
 			// Always use multi-row parsing (single-row is just multi-row with one item)
 			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
@@ -442,7 +442,7 @@ export class QueueWorker {
 
 			// Parse and transform LLM response using unified method
 			const rawContent = result.choices[0].message.content;
-			let redoExtractions = this.parseAndTransformLLMResponse(rawContent, redoColumns, featureFlags);
+			let redoExtractions = this.parseAndTransformLLMResponse(rawContent, redoColumns, featureFlags, settings.coordinateFormat);
 
 			// Ensure redoExtractions is an array
 			if (!Array.isArray(redoExtractions)) {
@@ -951,13 +951,54 @@ export class QueueWorker {
 	}
 
 	/**
+	 * Coordinate field names for different bbox orders
+	 */
+	private static readonly COORD_FIELDS_XYXY = ['x1', 'y1', 'x2', 'y2'];
+	private static readonly COORD_FIELDS_YXYX = ['y_min', 'x_min', 'y_max', 'x_max'];
+
+	/**
+	 * Reconstruct bbox_2d array from flattened coordinate fields
+	 * For TOON format, coordinates are output as separate fields to keep tabular format compact
+	 */
+	private reconstructBboxFromFlatCoords(
+		extractions: any[],
+		coordinateFormat: string
+	): any[] {
+		// Determine which coordinate fields to look for based on format
+		const isYXYX = coordinateFormat.includes('yxyx');
+		const coordFields = isYXYX ? QueueWorker.COORD_FIELDS_YXYX : QueueWorker.COORD_FIELDS_XYXY;
+
+		return extractions.map(extraction => {
+			// Check if this extraction has flattened coordinate fields
+			const hasCoordFields = coordFields.some(field => field in extraction);
+
+			if (hasCoordFields) {
+				// Extract coordinate values in order
+				const coords = coordFields.map(field => {
+					const value = extraction[field];
+					return typeof value === 'number' ? value : (parseInt(value, 10) || 0);
+				});
+
+				// Create new extraction with bbox_2d array and remove individual coord fields
+				const newExtraction = { ...extraction, bbox_2d: coords };
+				coordFields.forEach(field => delete newExtraction[field]);
+
+				return newExtraction;
+			}
+
+			return extraction;
+		});
+	}
+
+	/**
 	 * Unified LLM response parsing and transformation
 	 * Handles TOON/JSON parsing, format detection, and normalization
 	 */
 	private parseAndTransformLLMResponse(
 		rawContent: string,
 		columns: any[],
-		featureFlags: ExtractionFeatureFlags
+		featureFlags: ExtractionFeatureFlags,
+		coordinateFormat: string = 'normalized_1000'
 	): any[] {
 		// 1. Clean response (remove markdown fences)
 		let content = rawContent
@@ -976,8 +1017,12 @@ export class QueueWorker {
 			// Matches both: extractions[N]{fields}: (tabular) and extractions[N]: (YAML-like)
 			if (content.match(/^\w+\[\d+\](\{[^}]+\})?:/m)) {
 				console.log('TOON format detected, using official decoder with count fix...');
+
+				// Convert tabs to commas for TOON decoder (we use tabs in prompts to avoid German number format issues)
+				const tabsConverted = this.convertToonTabsToCommas(content);
+
 				// Fix array counts before parsing (LLMs often miscount)
-				const fixedContent = this.fixToonArrayCounts(content);
+				const fixedContent = this.fixToonArrayCounts(tabsConverted);
 				// Use official decoder with strict: false for flexibility
 				const decoded = decodeToon(fixedContent, { strict: false });
 				// Extract the extractions array from the decoded object
@@ -1030,10 +1075,50 @@ export class QueueWorker {
 			}));
 		}
 
+		// 5. Reconstruct bbox_2d from flattened coordinate fields (TOON + bbox only)
+		if (featureFlags.toonOutput && featureFlags.boundingBoxes && Array.isArray(parsedData)) {
+			console.log('Reconstructing bbox_2d from flattened coordinates...');
+			parsedData = this.reconstructBboxFromFlatCoords(parsedData, coordinateFormat);
+		}
+
 		console.log('Final extractions count:', Array.isArray(parsedData) ? parsedData.length : 'not an array');
 		console.log('=== End LLM Response Parsing ===');
 
 		return parsedData;
+	}
+
+	/**
+	 * Convert tabs to commas in TOON tabular data rows
+	 * We use tabs in prompts to avoid issues with German number format (e.g., 97.502,48)
+	 * The TOON decoder only supports comma delimiter, so we convert tabs to commas here
+	 * Values containing commas are quoted to preserve them
+	 */
+	private convertToonTabsToCommas(content: string): string {
+		const lines = content.split('\n');
+		const convertedLines = lines.map(line => {
+			// Only convert tabs in data rows (indented lines), not in headers
+			if (line.match(/^\s{2,}/) && line.includes('\t')) {
+				// Get the indentation
+				const indentMatch = line.match(/^(\s+)/);
+				const indent = indentMatch ? indentMatch[1] : '';
+				const rest = line.substring(indent.length);
+
+				// Split by tabs and quote values containing commas
+				const values = rest.split('\t').map(val => {
+					// If value contains comma and isn't already quoted, quote it
+					if (val.includes(',') && !val.startsWith('"')) {
+						return `"${val}"`;
+					}
+					return val;
+				});
+
+				const converted = indent + values.join(',');
+				console.log('Converting tabs to commas:', rest.substring(0, 40) + '... -> ' + converted.substring(indent.length, indent.length + 50) + '...');
+				return converted;
+			}
+			return line;
+		});
+		return convertedLines.join('\n');
 	}
 
 	/**

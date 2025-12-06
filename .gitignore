@@ -11,5 +11,9 @@ vite.config.ts.timestamp-*
 
 # PocketBase
 pb/pb_data
+data/pb_data
 !pb/pocketbase
 pb/pocketbase.exe
+
+# Misc
+token-analysis.html
