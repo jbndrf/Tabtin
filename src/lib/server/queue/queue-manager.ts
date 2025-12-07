@@ -63,7 +63,8 @@ export class QueueManager {
 			priority: Number(priority),
 			attempts: 0,
 			maxAttempts: Number(maxAttempts),
-			projectId: data.projectId
+			projectId: data.projectId,
+			queuedAt: new Date().toISOString()
 		};
 
 		try {
@@ -100,7 +101,8 @@ export class QueueManager {
 				priority: Number(priority),
 				attempts: 0,
 				maxAttempts: 3,
-				projectId
+				projectId,
+				queuedAt: new Date().toISOString()
 			};
 
 			try {
@@ -120,12 +122,14 @@ export class QueueManager {
 	async getNextJob(): Promise<QueueJob | null> {
 		try {
 			const pb = await this.getPocketBase();
+			const now = new Date().toISOString();
 
 			// Use atomic update with filter to prevent race conditions
-			// Only get jobs that are still "queued" - if another worker grabbed it, this will fail
+			// Only get jobs that are still "queued" and ready to be processed (queuedAt <= now)
+			// Jobs without queuedAt (legacy) are processed immediately via the empty string check
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
-				filter: 'status = "queued"',
-				sort: '+priority,+created' // Also sort by created for FIFO within same priority
+				filter: `status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+				sort: '+priority,+queuedAt,+created' // Sort by priority, then queuedAt, then created for FIFO
 			});
 
 			if (records.items.length === 0) {
@@ -189,12 +193,15 @@ export class QueueManager {
 			const job = await pb.collection(QUEUE_COLLECTION).getOne(jobId);
 
 			if (retry && job.attempts < job.maxAttempts) {
+				// Schedule retry with exponential backoff - non-blocking
+				// Job will be queued at the end and won't be picked up until delay passes
 				const retryDelayMs = Math.pow(2, job.attempts) * 1000;
-				await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+				const queuedAt = new Date(Date.now() + retryDelayMs).toISOString();
 
 				await pb.collection(QUEUE_COLLECTION).update(jobId, {
 					status: 'queued',
-					lastError: error
+					lastError: error,
+					queuedAt
 				});
 			} else {
 				await pb.collection(QUEUE_COLLECTION).update(jobId, {
@@ -300,7 +307,8 @@ export class QueueManager {
 		await pb.collection(QUEUE_COLLECTION).update(jobId, {
 			status: 'queued',
 			attempts: 0,
-			lastError: null
+			lastError: null,
+			queuedAt: new Date().toISOString()
 		});
 	}
 
@@ -374,6 +382,7 @@ export class QueueManager {
 			maxAttempts: record.maxAttempts,
 			lastError: record.lastError,
 			createdAt: record.created,
+			queuedAt: record.queuedAt,
 			startedAt: record.startedAt,
 			completedAt: record.completedAt,
 			projectId: record.projectId

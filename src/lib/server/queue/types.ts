@@ -14,6 +14,7 @@ export interface QueueJob {
 	maxAttempts: number;
 	lastError?: string;
 	createdAt: string;
+	queuedAt?: string;
 	startedAt?: string;
 	completedAt?: string;
 	projectId: string;

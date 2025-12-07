@@ -11,6 +11,7 @@ import { getBboxOrder } from '$lib/utils/coordinates';
 import { findColumnByKeyOrName } from '$lib/utils/column-matcher';
 import { BatchStatus } from '$lib/constants/batch-status';
 import { decode as decodeToon } from '@toon-format/toon';
+import { Agent } from 'undici';
 
 export class QueueWorker {
 	private queueManager: QueueManager;
@@ -861,15 +862,29 @@ export class QueueWorker {
 	/**
 	 * Unified LLM API call method
 	 * Handles timeout, abort controller, and error handling
+	 * Uses undici Agent with custom timeouts for llama.cpp compatibility
 	 */
 	private async callLlmApi(
 		content: Array<{ type: string; [key: string]: any }>,
 		settings: { endpoint: string; apiKey: string; modelName: string; requestTimeout?: number }
 	): Promise<any> {
-		const timeoutMinutes = settings.requestTimeout ?? 10;
+		// 0 means unlimited (24 hours max), undefined defaults to 10 minutes
+		const requestTimeoutMinutes = settings.requestTimeout ?? 10;
+		const timeoutMs = requestTimeoutMinutes === 0
+			? 24 * 60 * 60 * 1000  // 24 hours (effectively unlimited)
+			: requestTimeoutMinutes * 60 * 1000;
+
+		// Create undici agent with extended timeouts for large requests
+		// This fixes HeadersTimeoutError with llama.cpp on large PDFs
+		const agent = new Agent({
+			connectTimeout: timeoutMs,
+			headersTimeout: timeoutMs,
+			bodyTimeout: timeoutMs
+		});
+
 		return this.connectionPool.execute(async () => {
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), timeoutMinutes * 60 * 1000);
+			const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 			try {
 				const response = await fetch(settings.endpoint, {
@@ -882,7 +897,9 @@ export class QueueWorker {
 						model: settings.modelName,
 						messages: [{ role: 'user', content }]
 					}),
-					signal: controller.signal
+					signal: controller.signal,
+					// @ts-expect-error - dispatcher is a valid undici option
+					dispatcher: agent
 				});
 
 				if (!response.ok) {
@@ -893,6 +910,7 @@ export class QueueWorker {
 				return response.json();
 			} finally {
 				clearTimeout(timeoutId);
+				await agent.close();
 			}
 		});
 	}
