@@ -11,7 +11,9 @@ import { getBboxOrder } from '$lib/utils/coordinates';
 import { findColumnByKeyOrName } from '$lib/utils/column-matcher';
 import { BatchStatus } from '$lib/constants/batch-status';
 import { decode as decodeToon } from '@toon-format/toon';
-import { Agent } from 'undici';
+import https from 'https';
+import http from 'http';
+import { URL } from 'url';
 
 export class QueueWorker {
 	private queueManager: QueueManager;
@@ -861,8 +863,8 @@ export class QueueWorker {
 
 	/**
 	 * Unified LLM API call method
-	 * Handles timeout, abort controller, and error handling
-	 * Uses undici Agent with custom timeouts for llama.cpp compatibility
+	 * Handles timeout and error handling using native Node.js http/https modules
+	 * This avoids undici dependency issues while supporting configurable timeouts
 	 */
 	private async callLlmApi(
 		content: Array<{ type: string; [key: string]: any }>,
@@ -874,44 +876,57 @@ export class QueueWorker {
 			? 24 * 60 * 60 * 1000  // 24 hours (effectively unlimited)
 			: requestTimeoutMinutes * 60 * 1000;
 
-		// Create undici agent with extended timeouts for large requests
-		// This fixes HeadersTimeoutError with llama.cpp on large PDFs
-		const agent = new Agent({
-			connectTimeout: timeoutMs,
-			headersTimeout: timeoutMs,
-			bodyTimeout: timeoutMs
-		});
-
 		return this.connectionPool.execute(async () => {
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+			return new Promise((resolve, reject) => {
+				const url = new URL(settings.endpoint);
+				const isHttps = url.protocol === 'https:';
+				const client = isHttps ? https : http;
 
-			try {
-				const response = await fetch(settings.endpoint, {
-					method: 'POST',
-					headers: {
-						Authorization: `Bearer ${settings.apiKey}`,
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({
-						model: settings.modelName,
-						messages: [{ role: 'user', content }]
-					}),
-					signal: controller.signal,
-					// @ts-expect-error - dispatcher is a valid undici option
-					dispatcher: agent
+				const body = JSON.stringify({
+					model: settings.modelName,
+					messages: [{ role: 'user', content }]
 				});
 
-				if (!response.ok) {
-					const errorBody = await response.text();
-					throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorBody}`);
-				}
+				const options: https.RequestOptions = {
+					hostname: url.hostname,
+					port: url.port || (isHttps ? 443 : 80),
+					path: url.pathname + url.search,
+					method: 'POST',
+					headers: {
+						'Authorization': `Bearer ${settings.apiKey}`,
+						'Content-Type': 'application/json',
+						'Content-Length': Buffer.byteLength(body)
+					}
+				};
 
-				return response.json();
-			} finally {
-				clearTimeout(timeoutId);
-				await agent.close();
-			}
+				const req = client.request(options, (res) => {
+					let data = '';
+					res.on('data', (chunk) => { data += chunk; });
+					res.on('end', () => {
+						if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+							try {
+								resolve(JSON.parse(data));
+							} catch (e) {
+								reject(new Error(`Failed to parse API response as JSON: ${data.substring(0, 500)}`));
+							}
+						} else {
+							reject(new Error(`API request failed: ${res.statusCode} ${res.statusMessage} - ${data}`));
+						}
+					});
+				});
+
+				req.setTimeout(timeoutMs, () => {
+					req.destroy();
+					reject(new Error(`Request timeout after ${timeoutMs}ms (${requestTimeoutMinutes} minutes)`));
+				});
+
+				req.on('error', (err) => {
+					reject(new Error(`API request error: ${err.message}`));
+				});
+
+				req.write(body);
+				req.end();
+			});
 		});
 	}
 
