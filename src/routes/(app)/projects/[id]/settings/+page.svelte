@@ -86,11 +86,11 @@
 
 	// PDF Processing settings (Advanced)
 	const PDF_DEFAULTS = {
-		dpi: 600,
+		dpi: 300,
 		format: 'png' as 'png' | 'jpeg',
 		quality: 100,
-		maxWidth: 7100,
-		maxHeight: 7100
+		maxWidth: 1024,
+		maxHeight: 1024
 	};
 	let pdfDpi = $state<number>(PDF_DEFAULTS.dpi);
 	let pdfFormat = $state<'png' | 'jpeg'>(PDF_DEFAULTS.format);
@@ -1071,8 +1071,8 @@
 									<p class="text-xs mt-2">Recommended values:</p>
 									<ul class="text-xs list-disc pl-4">
 										<li>150 DPI: Fast, good for clear documents</li>
-										<li>300 DPI: Balanced quality and speed</li>
-										<li>600 DPI: High quality (default)</li>
+										<li>300 DPI: Balanced quality and speed (default)</li>
+										<li>600 DPI: High quality</li>
 									</ul>
 								</div>
 							</Tooltip.Content>
@@ -1192,7 +1192,7 @@
 						</div>
 					</div>
 					<p class="text-xs text-muted-foreground">
-						Default: 7100px (A4 at 600 DPI). Lower values reduce memory usage and API costs.
+						Default: 1024px. Higher values increase detail but also memory usage and API costs.
 					</p>
 				</div>
 
