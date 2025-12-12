@@ -78,6 +78,14 @@ Multi-row instructions:
 - If the document contains only ONE item, still use row_index: 0
 - Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row`;
 
+// Image index instructions (always included since image_index is in output format)
+const IMAGE_INDEX_INSTRUCTIONS = `
+
+IMAGE INDEX:
+- image_index indicates which image (0-based) this extraction came from
+- If processing a single image, use image_index: 0 for ALL extractions
+- If processing multiple images, use the index of the image where the data appears`;
+
 // TOON format instructions (conditionally included)
 const TOON_INSTRUCTIONS = `
 
@@ -275,6 +283,9 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 	if (featureFlags.multiRowExtraction) {
 		prompt += MULTI_ROW_INSTRUCTIONS;
 	}
+
+	// Always include image_index instructions since it's in the output format
+	prompt += IMAGE_INDEX_INSTRUCTIONS;
 
 	if (featureFlags.toonOutput) {
 		prompt += TOON_INSTRUCTIONS;
