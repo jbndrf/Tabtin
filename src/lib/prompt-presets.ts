@@ -82,9 +82,10 @@ Multi-row instructions:
 const IMAGE_INDEX_INSTRUCTIONS = `
 
 IMAGE INDEX:
-- image_index indicates which image (0-based) this extraction came from
-- If processing a single image, use image_index: 0 for ALL extractions
-- If processing multiple images, use the index of the image where the data appears`;
+- image_index indicates which image (0-based) the data was extracted from
+- Single image: use image_index: 0 for all extractions
+- Multiple images: use the index of the image where the data appears
+- Example: Data from first image = 0, data from second image = 1`;
 
 // TOON format instructions (conditionally included)
 const TOON_INSTRUCTIONS = `
@@ -119,26 +120,18 @@ function generateOutputFormatSection(
 		return generateToonOutputFormatSection(columns, featureFlags, bboxOrder);
 	}
 
-	// Default JSON format
-	let format = `Return ONLY valid JSON in this exact structure. CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
-
-{
-  "extractions": [
-`;
-
-	// Generate example for each column
-	format += columns.map((col, index) => {
-		const isLast = index === columns.length - 1;
+	// Helper to build a single JSON example object
+	const buildJsonExample = (col: ColumnDefinition, rowIndex: number, imageIndex: number, isLast: boolean): string => {
 		let example = '    {\n';
 
 		if (featureFlags.multiRowExtraction) {
-			example += '      "row_index": 0,\n';
+			example += `      "row_index": ${rowIndex},\n`;
 		}
 
 		example += `      "column_id": "${col.id}",\n`;
 		example += `      "column_name": "${col.name}",\n`;
 		example += '      "value": "extracted value here",\n';
-		example += '      "image_index": 0';
+		example += `      "image_index": ${imageIndex}`;
 
 		if (featureFlags.boundingBoxes) {
 			example += `,\n      "bbox_2d": ${bboxOrder}`;
@@ -150,9 +143,45 @@ function generateOutputFormatSection(
 
 		example += '\n    }' + (isLast ? '' : ',');
 		return example;
-	}).join('\n');
+	};
+
+	// Default JSON format
+	let format = `Return ONLY valid JSON in this exact structure. CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
+
+{
+  "extractions": [
+`;
+
+	if (featureFlags.multiRowExtraction) {
+		// Show 2 rows with first 2 columns each to demonstrate row_index incrementing
+		const columnsToShow = columns.slice(0, Math.min(2, columns.length));
+		const examples: string[] = [];
+		// Row 0 (from image 0)
+		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
+			examples.push(buildJsonExample(columnsToShow[colIdx], 0, 0, false));
+		}
+		// Row 1 (from image 1, to also show image_index varying)
+		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
+			const isLast = colIdx === columnsToShow.length - 1;
+			examples.push(buildJsonExample(columnsToShow[colIdx], 1, 1, isLast));
+		}
+		format += examples.join('\n');
+	} else {
+		// Single row: show all columns
+		format += columns.map((col, index) => {
+			const isLast = index === columns.length - 1;
+			return buildJsonExample(col, 0, 0, isLast);
+		}).join('\n');
+	}
 
 	format += '\n  ]\n}';
+
+	if (featureFlags.multiRowExtraction) {
+		format += `
+
+Note: row_index groups fields belonging to the same item (0 for first item, 1 for second, etc.)`;
+	}
+
 	return format;
 }
 
@@ -180,25 +209,21 @@ function generateToonOutputFormatSection(
 		fieldList.push('confidence');
 	}
 
-	// Build TOON header
-	const header = `extractions[${columns.length}]{${fieldList.join(',')}}:`;
-
-	// Build sample rows manually (compact tabular format with TAB delimiter)
-	const sampleRows = columns.map((col, index) => {
+	// Helper to build a single sample row
+	const buildSampleRow = (col: ColumnDefinition, colIndex: number, rowIndex: number, imageIndex: number): string => {
 		const values: string[] = [];
 
 		if (featureFlags.multiRowExtraction) {
-			values.push('0');
+			values.push(String(rowIndex));
 		}
 
 		values.push(col.id);
 		values.push(col.name);
 		// Show example value - with tabs, commas in values are safe
-		values.push(index === 0 ? '1.234,56' : `sample_value_${index + 1}`);
-		values.push('0');
+		values.push(colIndex === 0 && rowIndex === 0 ? '1.234,56' : `sample_value_${colIndex + 1}`);
+		values.push(String(imageIndex));
 
 		if (featureFlags.boundingBoxes) {
-			// Add placeholder coordinate values - use angle brackets so model doesn't copy literally
 			const coordFields = parseBboxOrderToFields(bboxOrder);
 			values.push(...coordFields.map(f => `<${f}>`));
 		}
@@ -207,25 +232,53 @@ function generateToonOutputFormatSection(
 			values.push('0.95');
 		}
 
-		// Use TAB as delimiter
 		return '  ' + values.join('\t');
-	});
+	};
 
+	// Build sample rows
+	let sampleRows: string[];
+	let extractionCount: number;
+
+	if (featureFlags.multiRowExtraction) {
+		// Show 2 rows with first 2 columns each to demonstrate row_index incrementing
+		const columnsToShow = columns.slice(0, Math.min(2, columns.length));
+		sampleRows = [];
+		// Row 0 (from image 0)
+		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
+			sampleRows.push(buildSampleRow(columnsToShow[colIdx], colIdx, 0, 0));
+		}
+		// Row 1 (from image 1, to also show image_index varying)
+		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
+			sampleRows.push(buildSampleRow(columnsToShow[colIdx], colIdx, 1, 1));
+		}
+		extractionCount = sampleRows.length;
+	} else {
+		// Single row: show all columns
+		sampleRows = columns.map((col, index) => buildSampleRow(col, index, 0, 0));
+		extractionCount = columns.length;
+	}
+
+	const header = `extractions[${extractionCount}]{${fieldList.join(',')}}:`;
 	const toonExample = header + '\n' + sampleRows.join('\n');
 
 	let format = `Return ONLY valid TOON (NOT JSON). CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
 
-TOON Example with ${columns.length} field(s):
+TOON Example with ${extractionCount} extraction(s):
 \`\`\`
 ${toonExample}
 \`\`\`
 
 Important TOON rules:
-- The [${columns.length}] declares the array length - adjust based on actual extraction count
+- The [${extractionCount}] declares the array length - adjust based on actual extraction count
 - Each indented line is one extraction (2 spaces indent, TAB-separated values)
 - Values are in field order as declared in the header
 - Use TAB character between values (numbers like 97.502,48 are safe with tabs)
 - Use null for missing values`;
+
+	if (featureFlags.multiRowExtraction) {
+		format += `
+- row_index groups fields belonging to the same item (0 for first item, 1 for second, etc.)`;
+	}
 
 	return format;
 }

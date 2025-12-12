@@ -29,6 +29,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		console.log('[cancel endpoint] Authenticating with PocketBase');
 		const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
 		const pb = new PocketBase(pocketbaseUrl);
+		pb.autoCancellation(false);
 		await pb.collection('_superusers').authWithPassword(
 			privateEnv.POCKETBASE_ADMIN_EMAIL || '',
 			privateEnv.POCKETBASE_ADMIN_PASSWORD || ''
@@ -53,17 +54,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		});
 		console.log('[cancel endpoint] Found', batches.length, 'batches to reset');
 
-		// Reset batch statuses using batch API for atomic transaction
+		// Reset batch statuses in chunks (PocketBase batch API has limits)
 		if (batches.length > 0) {
-			const updateBatch = pb.createBatch();
-			for (const batch of batches) {
-				updateBatch.collection('image_batches').update(batch.id, {
-					status: 'failed',
-					error_message: 'Processing canceled by user'
-				});
+			const CHUNK_SIZE = 50;
+			for (let i = 0; i < batches.length; i += CHUNK_SIZE) {
+				const chunk = batches.slice(i, i + CHUNK_SIZE);
+				const updateBatch = pb.createBatch();
+				for (const batch of chunk) {
+					updateBatch.collection('image_batches').update(batch.id, {
+						status: 'failed',
+						error_message: 'Processing canceled by user'
+					});
+				}
+				await updateBatch.send();
+				console.log(`[cancel endpoint] Reset chunk ${Math.floor(i / CHUNK_SIZE) + 1} (${chunk.length} batches)`);
 			}
-			await updateBatch.send();
-			console.log('[cancel endpoint] Reset', batches.length, 'batches using batch API');
+			console.log('[cancel endpoint] Reset', batches.length, 'batches total');
 		}
 
 		console.log('[cancel endpoint] Success! Returning response');
