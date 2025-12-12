@@ -44,7 +44,7 @@
 	let sheetOpen = $state(false);
 	let drawerOpen = $state(false);
 	let currentColumnIndex = $state(0);
-	let activeTab = $state('basic');
+	let activeTab = $state('project');
 	let modelComboboxOpen = $state(false);
 	let schemaChatOpen = $state(false);
 
@@ -156,8 +156,8 @@
 
 	// Control sheet visibility based on active tab
 	$effect(() => {
-		// Close sheet when leaving columns tab
-		if (activeTab !== 'columns') {
+		// Close sheet when leaving schema tab
+		if (activeTab !== 'schema') {
 			sheetOpen = false;
 			drawerOpen = false;
 		}
@@ -451,16 +451,15 @@
 
 <div class="space-y-6 p-4">
 	<Tabs.Root bind:value={activeTab} class="w-full">
-		<Tabs.List class="grid w-full grid-cols-5">
-			<Tabs.Trigger value="basic">{t('project.settings.tabs.basic')}</Tabs.Trigger>
-			<Tabs.Trigger value="columns">{t('project.settings.tabs.columns')}</Tabs.Trigger>
-			<Tabs.Trigger value="prompts">{t('project.settings.tabs.prompts')}</Tabs.Trigger>
+		<Tabs.List class="grid w-full grid-cols-4">
+			<Tabs.Trigger value="project">Project</Tabs.Trigger>
+			<Tabs.Trigger value="schema">{t('project.settings.tabs.columns')}</Tabs.Trigger>
+			<Tabs.Trigger value="api">API</Tabs.Trigger>
 			<Tabs.Trigger value="processing">Processing</Tabs.Trigger>
-			<Tabs.Trigger value="advanced">Advanced</Tabs.Trigger>
 		</Tabs.List>
 
-		<!-- Basic Tab -->
-		<Tabs.Content value="basic" class="mt-4 space-y-4">
+		<!-- Project Tab -->
+		<Tabs.Content value="project" class="mt-4 space-y-4">
 			<div class="space-y-4">
 				<h2 class="text-xl font-semibold">{t('project.settings.basic.title')}</h2>
 
@@ -484,13 +483,104 @@
 						rows={3}
 					/>
 				</div>
+			</div>
+		</Tabs.Content>
 
+		<!-- Schema Tab -->
+		<Tabs.Content value="schema" class="mt-4 space-y-4">
+			<div class="space-y-4">
+				<!-- Table Preview -->
+				<div>
+					<div class="mb-3 flex items-center justify-between">
+						<h2 class="text-xl font-semibold">{t('project.settings.columns.preview_title')}</h2>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							onclick={addColumn}
+							class="h-9 w-9"
+						>
+							<Plus class="h-5 w-5" />
+						</Button>
+					</div>
+
+					{#if columns.length === 0}
+						<div class="flex items-center justify-center rounded-lg border border-dashed p-8">
+							<div class="text-center">
+								<p class="text-sm text-muted-foreground">{t('project.settings.columns.preview_empty')}</p>
+								<Button type="button" variant="outline" onclick={addColumn} class="mt-4">
+									<Plus class="mr-2 h-4 w-4" />
+									{t('project.settings.columns.add_button')}
+								</Button>
+							</div>
+						</div>
+					{:else}
+						<div class="overflow-x-auto rounded-lg border">
+							<table class="w-full">
+								<thead class="bg-muted/50">
+									<tr>
+										{#each columns as column, i}
+											<th
+												class:border-primary={currentColumnIndex === i && (sheetOpen || drawerOpen)}
+												class={`cursor-pointer border-r px-4 py-3 text-left text-sm font-semibold transition-colors hover:bg-muted ${currentColumnIndex === i && (sheetOpen || drawerOpen) ? 'bg-primary/10' : ''}`}
+												onclick={() => openColumnEditor(i)}
+											>
+												{column.name || `Column ${i + 1}`}
+												<div class="text-xs font-normal text-muted-foreground">
+													{t(`project.settings.columns.types.${column.type}`)}
+												</div>
+											</th>
+										{/each}
+									</tr>
+								</thead>
+								<tbody>
+									<tr>
+										{#each columns as column}
+											<td class="border-r border-t px-4 py-3 text-sm text-muted-foreground italic">
+												Sample data
+											</td>
+										{/each}
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					{/if}
+				</div>
 			</div>
 
-			<Separator />
+			<!-- Schema Chat FAB -->
+			{#if !loading}
+				<Tooltip.Root>
+					<Tooltip.Trigger asChild>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								variant="default"
+								size="icon"
+								class="fixed bottom-20 right-4 md:bottom-6 md:right-6 h-14 w-14 rounded-full shadow-lg z-50"
+								onclick={() => schemaChatOpen = true}
+							>
+								<MessageSquare class="h-6 w-6" />
+							</Button>
+						{/snippet}
+					</Tooltip.Trigger>
+					<Tooltip.Content side="left">
+						<p>AI Schema Assistant</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+		</Tabs.Content>
 
+		<!-- API Tab -->
+		<Tabs.Content value="api" class="mt-4 space-y-6">
+			<!-- Connection Section -->
 			<div class="space-y-4">
-				<h2 class="text-xl font-semibold">{t('project.settings.vision.title')}</h2>
+				<div>
+					<h2 class="text-xl font-semibold">{t('project.settings.vision.title')}</h2>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Configure your Vision LLM API connection.
+					</p>
+				</div>
 
 				<div class="space-y-2">
 					<Label for="endpointPreset">{t('project.settings.vision.endpoint_preset_label')}</Label>
@@ -505,7 +595,6 @@
 							} else {
 								endpoint = '';
 							}
-							// Clear models when switching presets
 							availableModels = [];
 							modelName = '';
 						}}
@@ -536,7 +625,7 @@
 						</p>
 					{:else if endpointPreset === 'google'}
 						<p class="text-xs text-muted-foreground">
-							Using Google's OpenAI-compatible Gemini API. Get your API key from Google AI Studio.
+							Using Google's OpenAI-compatible Gemini API.
 						</p>
 					{/if}
 				</div>
@@ -626,193 +715,17 @@
 					</p>
 				</div>
 			</div>
-		</Tabs.Content>
 
-		<!-- Columns Tab -->
-		<Tabs.Content value="columns" class="mt-4 space-y-4">
-			<div class="space-y-4">
-				<!-- Table Preview -->
-				<div>
-					<div class="mb-3 flex items-center justify-between">
-						<h2 class="text-xl font-semibold">{t('project.settings.columns.preview_title')}</h2>
-						<Button
-							type="button"
-							variant="outline"
-							size="icon"
-							onclick={addColumn}
-							class="h-9 w-9"
-						>
-							<Plus class="h-5 w-5" />
-						</Button>
-					</div>
+			<Separator />
 
-					{#if columns.length === 0}
-						<div class="flex items-center justify-center rounded-lg border border-dashed p-8">
-							<div class="text-center">
-								<p class="text-sm text-muted-foreground">{t('project.settings.columns.preview_empty')}</p>
-								<Button type="button" variant="outline" onclick={addColumn} class="mt-4">
-									<Plus class="mr-2 h-4 w-4" />
-									{t('project.settings.columns.add_button')}
-								</Button>
-							</div>
-						</div>
-					{:else}
-						<div class="overflow-x-auto rounded-lg border">
-							<table class="w-full">
-								<thead class="bg-muted/50">
-									<tr>
-										{#each columns as column, i}
-											<th
-												class:border-primary={currentColumnIndex === i && (sheetOpen || drawerOpen)}
-												class={`cursor-pointer border-r px-4 py-3 text-left text-sm font-semibold transition-colors hover:bg-muted ${currentColumnIndex === i && (sheetOpen || drawerOpen) ? 'bg-primary/10' : ''}`}
-												onclick={() => openColumnEditor(i)}
-											>
-												{column.name || `Column ${i + 1}`}
-												<div class="text-xs font-normal text-muted-foreground">
-													{t(`project.settings.columns.types.${column.type}`)}
-												</div>
-											</th>
-										{/each}
-									</tr>
-								</thead>
-								<tbody>
-									<tr>
-										{#each columns as column}
-											<td class="border-r border-t px-4 py-3 text-sm text-muted-foreground italic">
-												Sample data
-											</td>
-										{/each}
-									</tr>
-								</tbody>
-							</table>
-						</div>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Schema Chat FAB -->
-			{#if !loading}
-				<Tooltip.Root>
-					<Tooltip.Trigger asChild>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								variant="default"
-								size="icon"
-								class="fixed bottom-20 right-4 md:bottom-6 md:right-6 h-14 w-14 rounded-full shadow-lg z-50"
-								onclick={() => schemaChatOpen = true}
-							>
-								<MessageSquare class="h-6 w-6" />
-							</Button>
-						{/snippet}
-					</Tooltip.Trigger>
-					<Tooltip.Content side="left">
-						<p>AI Schema Assistant</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-		</Tabs.Content>
-
-		<!-- Prompts Tab -->
-		<Tabs.Content value="prompts" class="mt-4 space-y-4">
+			<!-- Performance Section -->
 			<div class="space-y-4">
 				<div>
-					<h2 class="text-xl font-semibold">{t('project.settings.prompts.title')}</h2>
+					<h3 class="text-lg font-semibold">Performance</h3>
 					<p class="mt-1 text-sm text-muted-foreground">
-						{t('project.settings.prompts.description')}
+						Configure rate limiting and request behavior.
 					</p>
 				</div>
-
-				<div class="space-y-2">
-					<Label for="preset">{t('project.settings.prompts.preset_label')}</Label>
-					<select
-						id="preset"
-						bind:value={selectedPreset}
-						class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-					>
-						<option value="qwen3vl">Qwen3 VL</option>
-						<option value="gemini2">Gemini 2.0</option>
-					</select>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.prompts.preset_auto_apply')}
-					</p>
-				</div>
-
-				<Separator />
-
-				<div class="space-y-2">
-					<Label for="coordinateFormat">{t('project.settings.prompts.coordinate_format_label')}</Label>
-					<select
-						id="coordinateFormat"
-						bind:value={coordinateFormat}
-						disabled
-						class="flex h-9 w-full rounded-md border border-input bg-muted px-3 py-1 text-sm shadow-sm transition-colors cursor-not-allowed opacity-60"
-					>
-						<option value="normalized_1000">Normalized 0-1000 [x1, y1, x2, y2] - Qwen3</option>
-						<option value="normalized_1000_yxyx">Normalized 0-1000 [y_min, x_min, y_max, x_max] - Gemini</option>
-					</select>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.prompts.coordinate_format_synced')}
-					</p>
-				</div>
-
-				<div class="space-y-2">
-					<Label for="promptTemplate">{t('project.settings.prompts.template_label')}</Label>
-					<Textarea
-						id="promptTemplate"
-						bind:value={promptTemplate}
-						placeholder="Enter your custom prompt template..."
-						rows={16}
-						class="font-mono text-xs"
-					/>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.prompts.template_help')}
-					</p>
-				</div>
-
-				<Separator />
-
-				<div class="space-y-2">
-					<Label for="reviewPromptTemplate">Review Prompt Template (for redo)</Label>
-					<Textarea
-						id="reviewPromptTemplate"
-						bind:value={reviewPromptTemplate}
-						placeholder="Enter your custom review prompt template for redo operations..."
-						rows={16}
-						class="font-mono text-xs"
-					/>
-					<p class="text-xs text-muted-foreground">
-						This prompt is used when re-extracting specific fields. It will receive context about previously extracted data and cropped images.
-					</p>
-				</div>
-
-				<Separator />
-
-				<div>
-					<h3 class="mb-2 text-lg font-semibold">
-						{t('project.settings.prompts.preview_title')}
-					</h3>
-					<div class="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-						<pre class="whitespace-pre-wrap">{generateFullPrompt()}</pre>
-					</div>
-					<p class="mt-2 text-xs text-muted-foreground">
-						This is what the AI will see when processing images
-					</p>
-				</div>
-			</div>
-		</Tabs.Content>
-
-		<!-- Processing Tab -->
-		<Tabs.Content value="processing" class="mt-4 space-y-4">
-			<div class="space-y-4">
-				<div>
-					<h2 class="text-xl font-semibold">Processing & Rate Limiting</h2>
-					<p class="mt-1 text-sm text-muted-foreground">
-						Configure how batches are processed and rate limited to avoid hitting API limits.
-					</p>
-				</div>
-
-				<Separator />
 
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
@@ -828,7 +741,7 @@
 							<Tooltip.Content>
 								<div class="max-w-xs space-y-1">
 									<p class="font-medium">Rate Limiting</p>
-									<p class="text-xs">Maximum number of API requests allowed per minute. The system will automatically calculate delays to stay within this limit.</p>
+									<p class="text-xs">Maximum number of API requests allowed per minute.</p>
 									{#if requestsPerMinute > 0}
 										<p class="text-xs font-medium mt-2">Current: {requestsPerMinute} requests/min = {(60 / requestsPerMinute).toFixed(2)}s between requests</p>
 									{/if}
@@ -870,23 +783,252 @@
 								<div class="max-w-xs space-y-2">
 									<div>
 										<p class="font-medium text-xs">Linear Mode (Default)</p>
-										<p class="text-xs">Batches are processed one at a time. Each request waits for the previous one to complete. The rate limiter tracks all requests from the last 60 seconds.</p>
+										<p class="text-xs">Batches processed one at a time.</p>
 									</div>
 									<div>
 										<p class="font-medium text-xs">Parallel Mode</p>
-										<p class="text-xs">Multiple batches can be processed simultaneously. The rate limiter uses a sliding window to ensure the requests per minute limit is never exceeded.</p>
+										<p class="text-xs">Multiple batches processed simultaneously.</p>
 									</div>
-									<p class="text-xs italic">The pipeline never breaks - it simply waits when limits are reached.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					</div>
 				</div>
 
-				<Separator />
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Label for="requestTimeout">Request Timeout (minutes)</Label>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-1">
+									<p class="font-medium">API Request Timeout</p>
+									<p class="text-xs">Maximum wait time for LLM API responses.</p>
+									<ul class="text-xs list-disc pl-4 mt-2">
+										<li>5 min: Fast models, small documents</li>
+										<li>10 min: Default</li>
+										<li>15-20 min: Large PDFs</li>
+									</ul>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+					<div class="flex gap-4 items-center">
+						<Input
+							type="number"
+							id="requestTimeout"
+							bind:value={requestTimeout}
+							min="1"
+							max="30"
+							step="1"
+							class="h-12 w-32"
+						/>
+						<div class="flex gap-2">
+							<Button variant="outline" size="sm" onclick={() => requestTimeout = 5}>5</Button>
+							<Button variant="outline" size="sm" onclick={() => requestTimeout = 10}>10</Button>
+							<Button variant="outline" size="sm" onclick={() => requestTimeout = 15}>15</Button>
+							<Button variant="outline" size="sm" onclick={() => requestTimeout = 20}>20</Button>
+						</div>
+						<span class="text-sm text-muted-foreground">minutes</span>
+					</div>
+				</div>
+			</div>
+		</Tabs.Content>
 
+		<!-- Processing Tab -->
+		<Tabs.Content value="processing" class="mt-4 space-y-6">
+			<!-- Section 1: Document Input -->
+			<div class="space-y-4">
+				<div class="flex items-start justify-between">
+					<div>
+						<h2 class="text-xl font-semibold">Document Input</h2>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Configure how PDF documents are converted to images before processing.
+						</p>
+					</div>
+					<Button variant="outline" size="sm" onclick={resetPdfDefaults}>
+						Reset to Defaults
+					</Button>
+				</div>
+
+				<!-- DPI Setting -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Label for="pdfDpi">Resolution (DPI)</Label>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-1">
+									<p class="font-medium">DPI (Dots Per Inch)</p>
+									<p class="text-xs">Higher DPI produces sharper images but increases file size.</p>
+									<ul class="text-xs list-disc pl-4 mt-2">
+										<li>150: Fast, good for clear documents</li>
+										<li>300: Balanced (default)</li>
+										<li>600: High quality</li>
+									</ul>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+					<div class="flex gap-4 items-center">
+						<Input
+							type="number"
+							id="pdfDpi"
+							bind:value={pdfDpi}
+							min="72"
+							max="1200"
+							step="50"
+							class="h-12 w-32"
+						/>
+						<div class="flex gap-2">
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 150}>150</Button>
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 300}>300</Button>
+							<Button variant="outline" size="sm" onclick={() => pdfDpi = 600}>600</Button>
+						</div>
+					</div>
+				</div>
+
+				<!-- Format Setting -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Label for="pdfFormat">Output Format</Label>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">PNG (Default)</p>
+										<p class="text-xs">Lossless. Best for text documents.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">JPEG</p>
+										<p class="text-xs">Smaller file size. May have artifacts.</p>
+									</div>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+					<select
+						id="pdfFormat"
+						bind:value={pdfFormat}
+						class="flex h-12 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<option value="png">PNG (Lossless)</option>
+						<option value="jpeg">JPEG (Compressed)</option>
+					</select>
+				</div>
+
+				<!-- Quality Setting (only visible for JPEG) -->
+				{#if pdfFormat === 'jpeg'}
+					<div class="space-y-2">
+						<div class="flex items-center gap-2">
+							<Label for="pdfQuality">JPEG Quality</Label>
+							<span class="text-sm text-muted-foreground">{pdfQuality}%</span>
+						</div>
+						<input
+							type="range"
+							id="pdfQuality"
+							bind:value={pdfQuality}
+							min="50"
+							max="100"
+							step="5"
+							class="w-full max-w-xs"
+						/>
+					</div>
+				{/if}
+
+				<!-- Max Dimensions -->
+				<div class="space-y-2">
+					<Label>Maximum Dimensions</Label>
+					<div class="grid grid-cols-2 gap-4 max-w-md">
+						<div class="space-y-1">
+							<Label for="pdfMaxWidth" class="text-xs text-muted-foreground">Max Width (px)</Label>
+							<Input
+								type="number"
+								id="pdfMaxWidth"
+								bind:value={pdfMaxWidth}
+								min="1000"
+								max="15000"
+								step="100"
+								class="h-12"
+							/>
+						</div>
+						<div class="space-y-1">
+							<Label for="pdfMaxHeight" class="text-xs text-muted-foreground">Max Height (px)</Label>
+							<Input
+								type="number"
+								id="pdfMaxHeight"
+								bind:value={pdfMaxHeight}
+								min="1000"
+								max="15000"
+								step="100"
+								class="h-12"
+							/>
+						</div>
+					</div>
+				</div>
+
+				<!-- Include OCR Text -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="includeOcrText"
+								bind:checked={includeOcrText}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="includeOcrText" class="cursor-pointer">Include OCR Text in Vision LLM Request</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">Enabled (Default)</p>
+										<p class="text-xs">OCR text is sent alongside images to help accuracy.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">Disabled</p>
+										<p class="text-xs">Pure visual analysis only.</p>
+									</div>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+			</div>
+
+			<Separator />
+
+			<!-- Section 2: Extraction Features -->
+			<div class="space-y-4">
 				<div>
-					<h3 class="text-lg font-medium mb-2">Extraction Features</h3>
+					<h3 class="text-lg font-semibold">Extraction Features</h3>
 					<p class="text-sm text-muted-foreground mb-4">Toggle which features are enabled for document extraction.</p>
 				</div>
 
@@ -912,7 +1054,7 @@
 							</Tooltip.Trigger>
 							<Tooltip.Content>
 								<div class="max-w-xs space-y-1">
-									<p class="text-xs">Extract coordinate regions for each field. Required for visual highlighting in review mode and for redo cropping.</p>
+									<p class="text-xs">Extract coordinate regions for each field. Required for visual highlighting and redo cropping.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
@@ -957,7 +1099,7 @@
 							</Tooltip.Trigger>
 							<Tooltip.Content>
 								<div class="max-w-xs space-y-1">
-									<p class="text-xs">Request extraction certainty values (0.0-1.0). Useful for quality review and filtering uncertain extractions.</p>
+									<p class="text-xs">Request certainty values (0.0-1.0) for quality review.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
@@ -988,17 +1130,26 @@
 								<div class="max-w-xs space-y-2">
 									<div>
 										<p class="font-medium text-xs">Single Row (Default)</p>
-										<p class="text-xs">Each image contains one item to extract. Use this for product labels, business cards, single documents, etc.</p>
+										<p class="text-xs">One item per image (product labels, business cards).</p>
 									</div>
 									<div>
 										<p class="font-medium text-xs">Multi-Row Mode</p>
-										<p class="text-xs">Each image may contain multiple items/transactions/entries. Use this for bank statements, receipts with line items, invoices with multiple products, etc.</p>
+										<p class="text-xs">Multiple items per image (invoices, bank statements).</p>
 									</div>
-									<p class="text-xs italic">Note: Multilingual content on a single item is NOT treated as multiple rows.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					</div>
+				</div>
+			</div>
+
+			<Separator />
+
+			<!-- Section 3: Output Format -->
+			<div class="space-y-4">
+				<div>
+					<h3 class="text-lg font-semibold">Output Format</h3>
+					<p class="text-sm text-muted-foreground mb-4">Configure output format and custom prompts.</p>
 				</div>
 
 				<!-- TOON Output Format Toggle -->
@@ -1025,302 +1176,59 @@
 								<div class="max-w-xs space-y-2">
 									<div>
 										<p class="font-medium text-xs">JSON (Default)</p>
-										<p class="text-xs">Standard JSON output format. Compatible with all models.</p>
+										<p class="text-xs">Standard JSON output. Compatible with all models.</p>
 									</div>
 									<div>
 										<p class="font-medium text-xs">TOON Format</p>
-										<p class="text-xs">Token-Oriented Object Notation. Reduces output tokens by 40-50%, resulting in faster extraction times with same accuracy.</p>
+										<p class="text-xs">40-50% fewer tokens, faster extraction.</p>
 									</div>
-									<p class="text-xs italic">TOON is ideal for high-volume extraction where speed matters.</p>
 								</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					</div>
 				</div>
-			</div>
-		</Tabs.Content>
 
-		<!-- Advanced Tab -->
-		<Tabs.Content value="advanced" class="mt-4 space-y-4">
-			<div class="space-y-4">
-				<div class="flex items-start justify-between">
-					<div>
-						<h2 class="text-xl font-semibold">PDF Conversion Settings</h2>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Configure how PDF documents are converted to images before processing.
-						</p>
-					</div>
-					<Button variant="outline" size="sm" onclick={resetPdfDefaults}>
-						Reset to Defaults
-					</Button>
-				</div>
-
-				<Separator />
-
-				<!-- DPI Setting -->
+				<!-- Custom Prompt Template -->
 				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="pdfDpi">Resolution (DPI)</Label>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="font-medium">DPI (Dots Per Inch)</p>
-									<p class="text-xs">Higher DPI produces sharper images but increases file size and processing time.</p>
-									<p class="text-xs mt-2">Recommended values:</p>
-									<ul class="text-xs list-disc pl-4">
-										<li>150 DPI: Fast, good for clear documents</li>
-										<li>300 DPI: Balanced quality and speed (default)</li>
-										<li>600 DPI: High quality</li>
-									</ul>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-					<div class="flex gap-4 items-center">
-						<Input
-							type="number"
-							id="pdfDpi"
-							bind:value={pdfDpi}
-							min="72"
-							max="1200"
-							step="50"
-							class="h-12 w-32"
-						/>
-						<div class="flex gap-2">
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 150}>150</Button>
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 300}>300</Button>
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 600}>600</Button>
-						</div>
-					</div>
-				</div>
-
-				<!-- Format Setting -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="pdfFormat">Output Format</Label>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">PNG (Default)</p>
-										<p class="text-xs">Lossless compression. Best for documents with text and sharp edges. Larger file size.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">JPEG</p>
-										<p class="text-xs">Lossy compression. Smaller file size. May introduce artifacts around text.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-					<select
-						id="pdfFormat"
-						bind:value={pdfFormat}
-						class="flex h-12 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<option value="png">PNG (Lossless)</option>
-						<option value="jpeg">JPEG (Compressed)</option>
-					</select>
-				</div>
-
-				<!-- Quality Setting (only visible for JPEG) -->
-				{#if pdfFormat === 'jpeg'}
-					<div class="space-y-2">
-						<div class="flex items-center gap-2">
-							<Label for="pdfQuality">JPEG Quality</Label>
-							<span class="text-sm text-muted-foreground">{pdfQuality}%</span>
-						</div>
-						<input
-							type="range"
-							id="pdfQuality"
-							bind:value={pdfQuality}
-							min="50"
-							max="100"
-							step="5"
-							class="w-full max-w-xs"
-						/>
-						<p class="text-xs text-muted-foreground">
-							Higher quality means larger file size. 85-95% is usually a good balance.
-						</p>
-					</div>
-				{/if}
-
-				<Separator />
-
-				<!-- Max Dimensions -->
-				<div class="space-y-4">
-					<div>
-						<h3 class="text-lg font-medium">Maximum Dimensions</h3>
-						<p class="text-sm text-muted-foreground">
-							Limit the maximum output size. Images exceeding these dimensions will be scaled down proportionally.
-						</p>
-					</div>
-
-					<div class="grid grid-cols-2 gap-4 max-w-md">
-						<div class="space-y-2">
-							<Label for="pdfMaxWidth">Max Width (px)</Label>
-							<Input
-								type="number"
-								id="pdfMaxWidth"
-								bind:value={pdfMaxWidth}
-								min="1000"
-								max="15000"
-								step="100"
-								class="h-12"
-							/>
-						</div>
-						<div class="space-y-2">
-							<Label for="pdfMaxHeight">Max Height (px)</Label>
-							<Input
-								type="number"
-								id="pdfMaxHeight"
-								bind:value={pdfMaxHeight}
-								min="1000"
-								max="15000"
-								step="100"
-								class="h-12"
-							/>
-						</div>
-					</div>
+					<Label for="promptTemplate">{t('project.settings.prompts.template_label')}</Label>
+					<Textarea
+						id="promptTemplate"
+						bind:value={promptTemplate}
+						placeholder="Enter your custom prompt template..."
+						rows={10}
+						class="font-mono text-xs"
+					/>
 					<p class="text-xs text-muted-foreground">
-						Default: 1024px. Higher values increase detail but also memory usage and API costs.
+						{t('project.settings.prompts.template_help')}
 					</p>
 				</div>
 
-				<Separator />
-
-				<!-- OCR Text Setting -->
+				<!-- Review Prompt Template -->
 				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="includeOcrText"
-								bind:checked={includeOcrText}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="includeOcrText" class="cursor-pointer">Include OCR Text in Vision LLM Request</Label>
-						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">Enabled (Default)</p>
-										<p class="text-xs">PDF text extracted via OCR is sent alongside images to the vision LLM. This can help with text recognition accuracy.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">Disabled</p>
-										<p class="text-xs">Only images are sent to the vision LLM. Use this if OCR text is causing confusion or if you want the LLM to rely purely on visual analysis.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
+					<Label for="reviewPromptTemplate">Review Prompt Template (for redo)</Label>
+					<Textarea
+						id="reviewPromptTemplate"
+						bind:value={reviewPromptTemplate}
+						placeholder="Enter your custom review prompt template..."
+						rows={10}
+						class="font-mono text-xs"
+					/>
+					<p class="text-xs text-muted-foreground">
+						Used when re-extracting specific fields.
+					</p>
 				</div>
 
-				<Separator />
-
-				<!-- Info Card -->
-				<Card.Root class="bg-muted/50">
-					<Card.Content class="pt-6">
-						<div class="space-y-2 text-sm">
-							<p class="font-medium">Current estimated settings:</p>
-							<ul class="text-muted-foreground space-y-1">
-								<li>Scale factor: {(pdfDpi / 72).toFixed(2)}x</li>
-								<li>Format: {pdfFormat.toUpperCase()}{pdfFormat === 'jpeg' ? ` at ${pdfQuality}% quality` : ''}</li>
-								<li>Max output: {pdfMaxWidth} x {pdfMaxHeight} pixels</li>
-							</ul>
-							<p class="text-xs text-muted-foreground mt-3">
-								These settings apply when PDFs are uploaded and converted to images for vision model processing.
-							</p>
-						</div>
-					</Card.Content>
-				</Card.Root>
-
-				<Separator class="my-6" />
-
-				<!-- API Request Settings -->
-				<div class="space-y-4">
-					<div class="flex items-start justify-between">
-						<div>
-							<h2 class="text-xl font-semibold">API Request Settings</h2>
-							<p class="mt-1 text-sm text-muted-foreground">
-								Configure timeouts for LLM API requests. Larger documents may need longer timeouts.
-							</p>
-						</div>
-						<Button variant="outline" size="sm" onclick={() => requestTimeout = API_DEFAULTS.requestTimeout}>
-							Reset to Default
-						</Button>
+				<!-- Prompt Preview -->
+				<div>
+					<h4 class="mb-2 text-sm font-semibold">
+						{t('project.settings.prompts.preview_title')}
+					</h4>
+					<div class="overflow-x-auto rounded-md bg-muted p-3 text-xs max-h-64 overflow-y-auto">
+						<pre class="whitespace-pre-wrap">{generateFullPrompt()}</pre>
 					</div>
-
-					<div class="space-y-2">
-						<div class="flex items-center gap-2">
-							<Label for="requestTimeout">Request Timeout (minutes)</Label>
-							<Tooltip.Root>
-								<Tooltip.Trigger>
-									{#snippet child({ props })}
-										<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-											<HelpCircle class="h-4 w-4" />
-										</button>
-									{/snippet}
-								</Tooltip.Trigger>
-								<Tooltip.Content>
-									<div class="max-w-xs space-y-1">
-										<p class="font-medium">API Request Timeout</p>
-										<p class="text-xs">Maximum time to wait for LLM API responses. Increase this for large multi-page documents or slow models.</p>
-										<p class="text-xs mt-2">Recommended values:</p>
-										<ul class="text-xs list-disc pl-4">
-											<li>5 min: Fast models, small documents</li>
-											<li>10 min: Default, most use cases</li>
-											<li>15-20 min: Large PDFs, slow models</li>
-										</ul>
-									</div>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						</div>
-						<div class="flex gap-4 items-center">
-							<Input
-								type="number"
-								id="requestTimeout"
-								bind:value={requestTimeout}
-								min="1"
-								max="30"
-								step="1"
-								class="h-12 w-32"
-							/>
-							<div class="flex gap-2">
-								<Button variant="outline" size="sm" onclick={() => requestTimeout = 5}>5</Button>
-								<Button variant="outline" size="sm" onclick={() => requestTimeout = 10}>10</Button>
-								<Button variant="outline" size="sm" onclick={() => requestTimeout = 15}>15</Button>
-								<Button variant="outline" size="sm" onclick={() => requestTimeout = 20}>20</Button>
-							</div>
-							<span class="text-sm text-muted-foreground">minutes</span>
-						</div>
-						<p class="text-xs text-muted-foreground">
-							Current: {requestTimeout} minutes = {requestTimeout * 60} seconds
-						</p>
-					</div>
+					<p class="mt-2 text-xs text-muted-foreground">
+						This is what the AI will see when processing images
+					</p>
 				</div>
 			</div>
 		</Tabs.Content>
