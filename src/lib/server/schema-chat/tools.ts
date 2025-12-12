@@ -19,12 +19,13 @@ export const APPROVAL_REQUIRED_TOOLS = [
 	'edit_column',
 	'remove_column',
 	'update_project_description',
-	'set_multi_row_mode'
+	'set_multi_row_mode',
+	'set_feature_flags'
 ] as const;
 
 export const SPECIAL_UI_TOOLS = ['ask_questions', 'request_example_image'] as const;
 
-export const AUTO_EXECUTE_TOOLS = ['get_current_schema', 'get_project_settings', 'analyze_document'] as const;
+export const AUTO_EXECUTE_TOOLS = ['get_current_schema', 'get_project_settings', 'get_feature_flags', 'analyze_document'] as const;
 
 export type ApprovalRequiredTool = (typeof APPROVAL_REQUIRED_TOOLS)[number];
 export type SpecialUITool = (typeof SPECIAL_UI_TOOLS)[number];
@@ -294,6 +295,49 @@ export const SCHEMA_CHAT_TOOLS: ToolDefinition[] = [
 				required: ['summary', 'documentType', 'identifiedFields']
 			}
 		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'get_feature_flags',
+			description:
+				'Get current extraction feature flags (bounding boxes, confidence scores, multi-row extraction, TOON output). This executes immediately without approval.',
+			parameters: {
+				type: 'object',
+				properties: {},
+				required: []
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'set_feature_flags',
+			description:
+				'Configure extraction features. Use this to enable/disable bounding boxes (location coordinates for extracted values), confidence scores (certainty levels), or TOON output format (compact tabular output instead of JSON).',
+			parameters: {
+				type: 'object',
+				properties: {
+					boundingBoxes: {
+						type: 'boolean',
+						description: 'Enable bounding box coordinates for extracted values. Useful when you need to know WHERE on the document each value was found.'
+					},
+					confidenceScores: {
+						type: 'boolean',
+						description: 'Enable confidence scores (0-1) indicating extraction certainty. Useful for flagging uncertain extractions for review.'
+					},
+					toonOutput: {
+						type: 'boolean',
+						description: 'Use TOON format instead of JSON. TOON is a compact tabular format that uses less tokens.'
+					},
+					reason: {
+						type: 'string',
+						description: 'Brief explanation of why these settings are appropriate'
+					}
+				},
+				required: ['reason']
+			}
+		}
 	}
 ];
 
@@ -360,6 +404,13 @@ export interface AnalyzeDocumentArgs {
 	summary: string;
 	documentType: string;
 	identifiedFields: string[];
+}
+
+export interface SetFeatureFlagsArgs {
+	boundingBoxes?: boolean;
+	confidenceScores?: boolean;
+	toonOutput?: boolean;
+	reason: string;
 }
 
 // Helper to check tool category

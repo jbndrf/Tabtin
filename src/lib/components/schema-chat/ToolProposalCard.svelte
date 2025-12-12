@@ -16,7 +16,8 @@
 		DollarSign,
 		ToggleLeft,
 		ChevronDown,
-		ChevronUp
+		ChevronUp,
+		Settings
 	} from 'lucide-svelte';
 	import type { PendingToolCall, Column } from '$lib/server/schema-chat/types';
 
@@ -54,7 +55,8 @@
 		edit_column: Pencil,
 		remove_column: Trash2,
 		update_project_description: FileText,
-		set_multi_row_mode: ToggleLeft
+		set_multi_row_mode: ToggleLeft,
+		set_feature_flags: Settings
 	};
 
 	// Column type icons
@@ -130,6 +132,24 @@
 					description: parsedArgs.reason,
 					details: []
 				};
+
+			case 'set_feature_flags': {
+				const changes: string[] = [];
+				if (parsedArgs.boundingBoxes !== undefined) {
+					changes.push(`Bounding boxes: ${parsedArgs.boundingBoxes ? 'ON' : 'OFF'}`);
+				}
+				if (parsedArgs.confidenceScores !== undefined) {
+					changes.push(`Confidence scores: ${parsedArgs.confidenceScores ? 'ON' : 'OFF'}`);
+				}
+				if (parsedArgs.toonOutput !== undefined) {
+					changes.push(`TOON output: ${parsedArgs.toonOutput ? 'ON' : 'OFF'}`);
+				}
+				return {
+					title: 'Update extraction features',
+					description: parsedArgs.reason,
+					details: changes.map(change => ({ label: '', value: change }))
+				};
+			}
 
 			default:
 				return {

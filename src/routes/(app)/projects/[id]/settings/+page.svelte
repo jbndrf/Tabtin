@@ -90,13 +90,15 @@
 		format: 'png' as 'png' | 'jpeg',
 		quality: 100,
 		maxWidth: 1024,
-		maxHeight: 1024
+		maxHeight: 1024,
+		includeOcrText: true
 	};
 	let pdfDpi = $state<number>(PDF_DEFAULTS.dpi);
 	let pdfFormat = $state<'png' | 'jpeg'>(PDF_DEFAULTS.format);
 	let pdfQuality = $state<number>(PDF_DEFAULTS.quality);
 	let pdfMaxWidth = $state<number>(PDF_DEFAULTS.maxWidth);
 	let pdfMaxHeight = $state<number>(PDF_DEFAULTS.maxHeight);
+	let includeOcrText = $state<boolean>(PDF_DEFAULTS.includeOcrText);
 
 	// API Request settings (Advanced)
 	const API_DEFAULTS = {
@@ -110,6 +112,7 @@
 		pdfQuality = PDF_DEFAULTS.quality;
 		pdfMaxWidth = PDF_DEFAULTS.maxWidth;
 		pdfMaxHeight = PDF_DEFAULTS.maxHeight;
+		includeOcrText = PDF_DEFAULTS.includeOcrText;
 		toast.success('PDF settings reset to defaults');
 	}
 
@@ -193,6 +196,7 @@
 			pdfQuality = settings.pdfQuality ?? PDF_DEFAULTS.quality;
 			pdfMaxWidth = settings.pdfMaxWidth ?? PDF_DEFAULTS.maxWidth;
 			pdfMaxHeight = settings.pdfMaxHeight ?? PDF_DEFAULTS.maxHeight;
+			includeOcrText = settings.includeOcrText ?? PDF_DEFAULTS.includeOcrText;
 
 			// Load API request settings
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
@@ -357,6 +361,7 @@
 				pdfQuality,
 				pdfMaxWidth,
 				pdfMaxHeight,
+				includeOcrText,
 				// API request settings
 				requestTimeout,
 				columns: columns.map((col, index) => ({
@@ -1198,6 +1203,44 @@
 
 				<Separator />
 
+				<!-- OCR Text Setting -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="includeOcrText"
+								bind:checked={includeOcrText}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="includeOcrText" class="cursor-pointer">Include OCR Text in Vision LLM Request</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs space-y-2">
+									<div>
+										<p class="font-medium text-xs">Enabled (Default)</p>
+										<p class="text-xs">PDF text extracted via OCR is sent alongside images to the vision LLM. This can help with text recognition accuracy.</p>
+									</div>
+									<div>
+										<p class="font-medium text-xs">Disabled</p>
+										<p class="text-xs">Only images are sent to the vision LLM. Use this if OCR text is causing confusion or if you want the LLM to rely purely on visual analysis.</p>
+									</div>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+				</div>
+
+				<Separator />
+
 				<!-- Info Card -->
 				<Card.Root class="bg-muted/50">
 					<Card.Content class="pt-6">
@@ -1560,6 +1603,7 @@
 		{columns}
 		projectDescription={description}
 		multiRowExtraction={featureFlags.multiRowExtraction}
+		{featureFlags}
 		chatHistory={schemaChatHistory}
 		{documentAnalyses}
 		pdfSettings={{ dpi: pdfDpi, format: pdfFormat, quality: pdfQuality, maxWidth: pdfMaxWidth, maxHeight: pdfMaxHeight }}
@@ -1571,6 +1615,9 @@
 		}}
 		onMultiRowChange={(enabled) => {
 			featureFlags.multiRowExtraction = enabled;
+		}}
+		onFeatureFlagsChange={(flags) => {
+			featureFlags = { ...featureFlags, ...flags };
 		}}
 		onChatHistoryChange={saveChatHistory}
 		onDocumentAnalysesChange={saveDocumentAnalyses}

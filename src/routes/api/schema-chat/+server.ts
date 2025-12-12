@@ -12,8 +12,10 @@ import {
 	type AskQuestionsArgs,
 	type RequestExampleImageArgs,
 	type SetMultiRowModeArgs,
-	type AnalyzeDocumentArgs
+	type AnalyzeDocumentArgs,
+	type SetFeatureFlagsArgs
 } from '$lib/server/schema-chat/tools';
+import type { ExtractionFeatureFlags } from '$lib/types/extraction';
 import { buildSystemPromptWithSchema } from '$lib/server/schema-chat/system-prompt';
 import type {
 	Column,
@@ -48,6 +50,7 @@ interface ToolExecutionResult {
 	updatedColumns?: Column[];
 	updatedDescription?: string;
 	updatedMultiRowExtraction?: boolean;
+	updatedFeatureFlags?: Partial<ExtractionFeatureFlags>;
 	documentAnalysis?: DocumentAnalysis;
 }
 
@@ -57,7 +60,8 @@ function executeToolCall(
 	argsString: string,
 	columns: Column[],
 	projectDescription?: string,
-	multiRowExtraction?: boolean
+	multiRowExtraction?: boolean,
+	featureFlags?: Partial<ExtractionFeatureFlags>
 ): ToolExecutionResult {
 	try {
 		const args = JSON.parse(argsString);
@@ -200,6 +204,54 @@ function executeToolCall(
 				};
 			}
 
+			case 'get_feature_flags': {
+				const flags = featureFlags || {};
+				const flagStatus = [
+					`- Bounding boxes: ${flags.boundingBoxes !== false ? 'ON' : 'OFF'}`,
+					`- Confidence scores: ${flags.confidenceScores !== false ? 'ON' : 'OFF'}`,
+					`- Multi-row extraction: ${flags.multiRowExtraction ? 'ON' : 'OFF'}`,
+					`- TOON output: ${flags.toonOutput ? 'ON' : 'OFF'}`
+				].join('\n');
+
+				return {
+					success: true,
+					message: `Current extraction features:\n${flagStatus}`
+				};
+			}
+
+			case 'set_feature_flags': {
+				const { boundingBoxes, confidenceScores, toonOutput, reason } = args as SetFeatureFlagsArgs;
+
+				const updates: Partial<ExtractionFeatureFlags> = {};
+				const changes: string[] = [];
+
+				if (boundingBoxes !== undefined) {
+					updates.boundingBoxes = boundingBoxes;
+					changes.push(`Bounding boxes: ${boundingBoxes ? 'ON' : 'OFF'}`);
+				}
+				if (confidenceScores !== undefined) {
+					updates.confidenceScores = confidenceScores;
+					changes.push(`Confidence scores: ${confidenceScores ? 'ON' : 'OFF'}`);
+				}
+				if (toonOutput !== undefined) {
+					updates.toonOutput = toonOutput;
+					changes.push(`TOON output: ${toonOutput ? 'ON' : 'OFF'}`);
+				}
+
+				if (changes.length === 0) {
+					return {
+						success: false,
+						message: 'No feature flags specified to change'
+					};
+				}
+
+				return {
+					success: true,
+					message: `Feature flags updated: ${changes.join(', ')}. ${reason}`,
+					updatedFeatureFlags: updates
+				};
+			}
+
 			default:
 				return {
 					success: false,
@@ -257,7 +309,7 @@ function parseImageRequestFromToolCall(
 
 // Handle chat mode - call LLM and categorize tool calls
 async function handleChatMode(body: ChatModeRequest) {
-	const { messages, settings, currentColumns, projectDescription, multiRowExtraction, documentAnalyses } = body;
+	const { messages, settings, currentColumns, projectDescription, multiRowExtraction, documentAnalyses, featureFlags } = body;
 
 	if (!settings.endpoint || !settings.modelName) {
 		return json({ error: 'LLM settings (endpoint and modelName) are required' }, { status: 400 });
@@ -274,7 +326,8 @@ async function handleChatMode(body: ChatModeRequest) {
 		})),
 		projectDescription,
 		multiRowExtraction,
-		documentAnalyses
+		documentAnalyses,
+		featureFlags
 	);
 
 	// Prepare messages for LLM - preserve full message structure including tool_calls
@@ -371,7 +424,8 @@ async function handleChatMode(body: ChatModeRequest) {
 					toolCall.function.arguments,
 					currentColumns,
 					projectDescription,
-					multiRowExtraction
+					multiRowExtraction,
+					featureFlags
 				);
 
 				autoExecuteResults.push({
@@ -432,11 +486,12 @@ async function handleChatMode(body: ChatModeRequest) {
 
 // Handle execute mode - execute approved tools
 async function handleExecuteMode(body: ExecuteModeRequest) {
-	const { toolDecisions, currentColumns, projectDescription } = body;
+	const { toolDecisions, currentColumns, projectDescription, featureFlags } = body;
 
 	let updatedColumns = [...currentColumns];
 	let updatedDescription = projectDescription;
 	let updatedMultiRowExtraction: boolean | undefined;
+	let updatedFeatureFlags: Partial<ExtractionFeatureFlags> | undefined;
 	const results: ToolResult[] = [];
 	const toolMessages: ChatMessage[] = [];
 
@@ -466,7 +521,8 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 			decision.function.arguments,
 			updatedColumns,
 			updatedDescription,
-			updatedMultiRowExtraction
+			updatedMultiRowExtraction,
+			{ ...featureFlags, ...updatedFeatureFlags }
 		);
 
 		results.push({
@@ -493,6 +549,9 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 		if (result.updatedMultiRowExtraction !== undefined) {
 			updatedMultiRowExtraction = result.updatedMultiRowExtraction;
 		}
+		if (result.updatedFeatureFlags) {
+			updatedFeatureFlags = { ...updatedFeatureFlags, ...result.updatedFeatureFlags };
+		}
 	}
 
 	return json({
@@ -500,6 +559,7 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 		updatedColumns: updatedColumns !== currentColumns ? updatedColumns : undefined,
 		updatedDescription: updatedDescription !== projectDescription ? updatedDescription : undefined,
 		updatedMultiRowExtraction,
+		updatedFeatureFlags,
 		toolMessages
 	});
 }

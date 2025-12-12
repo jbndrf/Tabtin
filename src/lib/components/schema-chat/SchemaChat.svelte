@@ -27,6 +27,7 @@
 		DocumentAnalysis,
 		ToolCall
 	} from '$lib/server/schema-chat/types';
+	import type { ExtractionFeatureFlags } from '$lib/types/extraction';
 
 	// UI-friendly message for display (simplified from ChatMessage)
 	export interface DisplayMessage {
@@ -56,6 +57,7 @@
 		columns: Column[];
 		projectDescription?: string;
 		multiRowExtraction?: boolean;
+		featureFlags?: Partial<ExtractionFeatureFlags>;
 		hasExistingData?: boolean;
 		chatHistory?: DisplayMessage[];
 		documentAnalyses?: DocumentAnalysis[];
@@ -63,6 +65,7 @@
 		onColumnsChange: (columns: Column[]) => void;
 		onDescriptionChange?: (description: string) => void;
 		onMultiRowChange?: (enabled: boolean) => void;
+		onFeatureFlagsChange?: (flags: Partial<ExtractionFeatureFlags>) => void;
 		onChatHistoryChange?: (messages: DisplayMessage[]) => void;
 		onDocumentAnalysesChange?: (analyses: DocumentAnalysis[]) => void;
 		onClose: () => void;
@@ -77,6 +80,7 @@
 		columns,
 		projectDescription = '',
 		multiRowExtraction = false,
+		featureFlags = {},
 		hasExistingData = false,
 		chatHistory = [],
 		documentAnalyses = [],
@@ -84,6 +88,7 @@
 		onColumnsChange,
 		onDescriptionChange,
 		onMultiRowChange,
+		onFeatureFlagsChange,
 		onChatHistoryChange,
 		onDocumentAnalysesChange,
 		onClose
@@ -296,6 +301,7 @@
 					currentColumns: columns,
 					projectDescription,
 					multiRowExtraction,
+					featureFlags,
 					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
@@ -433,6 +439,7 @@
 					currentColumns: columns,
 					projectDescription,
 					multiRowExtraction,
+					featureFlags,
 					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
@@ -537,6 +544,7 @@
 					currentColumns: columns,
 					projectDescription,
 					multiRowExtraction,
+					featureFlags,
 					documentAnalyses: storedDocumentAnalyses,
 					projectId
 				})
@@ -615,6 +623,7 @@
 					})),
 					currentColumns: columns,
 					projectDescription,
+					featureFlags,
 					projectId
 				})
 			});
@@ -640,6 +649,11 @@
 			// Update multi-row extraction if changed
 			if (data.updatedMultiRowExtraction !== undefined && onMultiRowChange) {
 				onMultiRowChange(data.updatedMultiRowExtraction);
+			}
+
+			// Update feature flags if changed
+			if (data.updatedFeatureFlags && onFeatureFlagsChange) {
+				onFeatureFlagsChange(data.updatedFeatureFlags);
 			}
 
 			// Add the pending assistant message to history (with tool_calls)

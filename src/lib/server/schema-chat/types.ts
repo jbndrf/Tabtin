@@ -1,5 +1,7 @@
 // Shared type definitions for schema chat
 
+import type { ExtractionFeatureFlags } from '$lib/types/extraction';
+
 // Tool status for tracking pending/executed tools
 export type ToolStatus = 'pending' | 'approved' | 'declined' | 'executed';
 
@@ -126,6 +128,7 @@ export interface ChatModeRequest {
 	projectDescription?: string;
 	projectId: string;
 	multiRowExtraction?: boolean;
+	featureFlags?: Partial<ExtractionFeatureFlags>;
 	// Stored document analyses for image memory
 	documentAnalyses?: DocumentAnalysis[];
 }
@@ -144,6 +147,7 @@ export interface ExecuteModeRequest {
 	currentColumns: Column[];
 	projectDescription?: string;
 	projectId: string;
+	featureFlags?: Partial<ExtractionFeatureFlags>;
 }
 
 // Combined API request type
@@ -175,6 +179,7 @@ export interface ExecuteModeResponse {
 	updatedColumns?: Column[];
 	updatedDescription?: string;
 	updatedMultiRowExtraction?: boolean;
+	updatedFeatureFlags?: Partial<ExtractionFeatureFlags>;
 	// Tool response messages to add to history
 	toolMessages?: ChatMessage[];
 }

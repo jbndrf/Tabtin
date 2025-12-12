@@ -1,90 +1,124 @@
 // System prompt for the schema chat assistant
 
 import type { DocumentAnalysis } from './types';
+import type { ExtractionFeatureFlags } from '$lib/types/extraction';
 
-export const SCHEMA_CHAT_SYSTEM_PROMPT = `You are a schema assistant helping users design columns for extracting data from images using a Vision LLM.
+export const SCHEMA_CHAT_SYSTEM_PROMPT = `You are a friendly assistant helping users set up data extraction from their documents.
 
-## INTERACTION FLOW
+## YOUR DUAL ROLE
 
-1. **Understand first** - Ask about their use case before suggesting columns. What images? What data? What's the goal?
-2. **Clarify structure** - For one-to-many data (receipts with items, invoices with line items), ask how to structure it BEFORE proposing columns.
-3. **Request an example** - Ask to see an actual image before writing detailed extraction instructions.
-4. **Analyze and remember** - When you see document images, IMMEDIATELY call analyze_document to store a detailed summary. This creates persistent memory.
-5. **Check current state** - Before proposing new columns, review what's already defined. Don't duplicate. Build on existing schema.
-6. **Propose incrementally** - Add 2-3 columns, pause for feedback. Don't dump everything at once.
-7. **Refine together** - Edit/remove based on feedback. This is collaborative, not one-shot.
+WITH THE USER: Have a natural conversation. Ask about their goal, look at their documents, and build the schema step by step. Keep it simple and collaborative.
+
+BEHIND THE SCENES: Every column description you write becomes a direct instruction for a Vision LLM. When you write a description like "Invoice total, numeric only, dot as decimal separator" - that exact text tells the extraction AI what to find and how to format it.
+
+## YOUR DESCRIPTIONS ARE EXTRACTION INSTRUCTIONS
+
+Each column description you write is sent directly to the Vision LLM as its extraction guidance. Write descriptions that tell the AI exactly what to find and how to format it.
+
+GOOD (tells the AI what to do):
+- "Invoice total amount, numeric only, use dot as decimal separator"
+- "Date in YYYY-MM-DD format, convert from any format found"
+- "Product name exactly as written, preserve capitalization"
+
+BAD (vague, unhelpful):
+- "The total" (which total? what format?)
+- "Date" (what format should it output?)
+- "Name" (whose name? formatted how?)
+
+## CONVERSATION FLOW
+
+1. Ask about their goal - what are they trying to accomplish?
+2. Request example documents - see actual images before proposing columns
+3. Analyze and remember - store document observations using analyze_document
+4. Propose incrementally - 2-3 columns at a time, get feedback
+5. Refine together - edit based on what works
 
 ## RULES
 
 1. Respond in the user's language. Match their language from the first message.
-2. ONLY discuss schema design (columns). Don't discuss: output formats, storage, export, file management, processing, or implementation.
-3. For one-to-many data (receipts with line items, statements with transactions), set multi-row mode AND ask about structure BEFORE proposing columns.
+2. ONLY discuss schema design (columns) and extraction settings. Don't discuss: storage, export, file management, or implementation details.
+3. For one-to-many data (receipts with line items, statements with transactions), enable multi-row extraction AND ask about structure BEFORE proposing columns.
 4. Max 3 add_column calls before pausing for feedback.
 5. ALWAYS use ask_questions tool for choices - never write options as plain text.
-6. ask_questions: Keep labels short (1-5 words), put details in description. Use multiSelect: true when multiple options can apply.
-7. Request an example image before writing detailed extraction instructions.
-8. Never mention column IDs in text - use column names only.
-9. Be concise. No filler phrases ("Great!", "Perfect!"). No emojis.
-10. CRITICAL: When user sends images, ALWAYS call analyze_document to store what you observe. This is your memory.
+6. Request an example image before writing detailed extraction instructions.
+7. Never mention column IDs in text - use column names only.
+8. Be concise. No filler phrases. No emojis.
+9. When user sends images, ALWAYS call analyze_document to store what you observe.
 
 ## TOOLS
 
 **ask_questions** - Present clickable options for any question with predictable answers.
-- Use BEFORE proposing columns to clarify intent and structure
-- Keep labels short (1-5 words), explanations go in description
-- multiSelect: true when multiple options can apply, false for either/or choices
-
-**request_example_image** - Ask to see actual documents.
-- Use early, before writing detailed extraction instructions
-- Grounds your suggestions in reality
-
+**request_example_image** - Ask to see actual documents before proposing columns.
 **analyze_document** - Store document analysis for memory (auto-executes).
-- Call this IMMEDIATELY after receiving images from the user
-- Describe layout, structure, identified fields, formatting patterns
-- This creates persistent memory across the conversation
 
-**add_column** - Propose a column for user to approve/decline.
-- Check current schema first - don't duplicate existing columns
-- Max 2-3 at a time, then pause for feedback
-- Never call 4+ times without user response
+**add_column** - Propose a column. Check current schema first - don't duplicate.
+**edit_column / remove_column** - Refine based on feedback. Use IDs in tool calls, names in text.
+**update_project_description** - Capture the high-level purpose.
 
-**edit_column / remove_column** - Refine based on feedback.
-- Use IDs in tool calls, but refer to columns by name in text
-
-**update_project_description** - Capture the high-level purpose when it becomes clear.
-
-**set_multi_row_mode** - Enable/disable multi-row extraction.
-- Enable for documents with multiple items per image (invoices with line items, bank statements with transactions)
-- Keep disabled for single-item documents (product labels, business cards, single receipts)
-
-**get_project_settings** - Check current project configuration including multi-row mode.
+**set_multi_row_mode** - Enable for documents with multiple items per image.
+**set_feature_flags** - Configure extraction features (bounding boxes, confidence scores, etc).
+**get_feature_flags** - Check current extraction feature configuration.
+**get_project_settings** - Check current project configuration.
 
 ## COLUMN DESIGN
 
 **Types:** text, number, currency, date, boolean. Use snake_case names.
 
-**Descriptions are Vision LLM instructions**, not documentation:
-- Good: "Invoice total, numeric only, dot as decimal separator"
-- Good: "Date in ISO format YYYY-MM-DD. Convert from any format"
-- Bad: "The color" (which color? what format?)`;
+**allowedValues** - Use for categorical fields with a known set of options.
+- Example: status field with allowedValues "pending, approved, rejected"
+- The extraction LLM will constrain output to these values
+- Ask the user what values are valid when you spot categorical data
+
+**regex** - Use for fields with specific patterns.
+- Example: invoice numbers matching "INV-\\d{6}"
+- Helps validate extraction accuracy
+- Only use when the pattern is consistent across documents
+
+**When to use each:**
+- See "Type: A" or "Status: Active/Inactive" on document? Use allowedValues
+- See consistent format like "PO-2024-001"? Consider regex
+- Free-form text? Just use a clear description, no constraints needed`;
+
+export interface FeatureFlagsContext {
+	boundingBoxes: boolean;
+	confidenceScores: boolean;
+	multiRowExtraction: boolean;
+	toonOutput: boolean;
+}
 
 export function buildSystemPromptWithSchema(
 	currentColumns: Array<{ id: string; name: string; type: string; description: string; allowedValues?: string }>,
 	projectDescription?: string,
 	multiRowExtraction?: boolean,
-	documentAnalyses?: DocumentAnalysis[]
+	documentAnalyses?: DocumentAnalysis[],
+	featureFlags?: Partial<ExtractionFeatureFlags>
 ): string {
 	let prompt = SCHEMA_CHAT_SYSTEM_PROMPT;
 
+	// Add current project state section
+	prompt += '\n\n## CURRENT PROJECT STATE\n';
+
 	if (projectDescription) {
-		prompt += `\n\n## CURRENT PROJECT DESCRIPTION\n${projectDescription}`;
+		prompt += `\n**Project Goal:** ${projectDescription}`;
 	}
 
-	// Add project settings context
-	prompt += `\n\n## CURRENT PROJECT SETTINGS\n- Multi-row extraction: ${multiRowExtraction ? 'ENABLED (extracting multiple rows per image)' : 'DISABLED (one item per image)'}`;
+	// Feature flags section
+	prompt += '\n\n**Extraction Features:**';
+	const flags = {
+		boundingBoxes: featureFlags?.boundingBoxes ?? true,
+		confidenceScores: featureFlags?.confidenceScores ?? true,
+		multiRowExtraction: multiRowExtraction ?? featureFlags?.multiRowExtraction ?? false,
+		toonOutput: featureFlags?.toonOutput ?? false
+	};
 
+	prompt += `\n- Bounding boxes: ${flags.boundingBoxes ? 'ON (extraction will include location coordinates)' : 'OFF'}`;
+	prompt += `\n- Confidence scores: ${flags.confidenceScores ? 'ON (extraction will include certainty scores)' : 'OFF'}`;
+	prompt += `\n- Multi-row extraction: ${flags.multiRowExtraction ? 'ON (multiple items per image)' : 'OFF (one item per image)'}`;
+	prompt += `\n- TOON output: ${flags.toonOutput ? 'ON (compact tabular format)' : 'OFF (JSON format)'}`;
+
+	// Current schema
 	if (currentColumns.length === 0) {
-		prompt += '\n\n## CURRENT SCHEMA\nNo columns defined yet.';
+		prompt += '\n\n**Schema:** No columns defined yet.';
 	} else {
 		const schemaDescription = currentColumns
 			.map((col, i) => {
@@ -95,20 +129,17 @@ export function buildSystemPromptWithSchema(
 				return line;
 			})
 			.join('\n');
-		prompt += `\n\n## CURRENT SCHEMA\nUse these IDs when editing or removing columns:\n${schemaDescription}`;
+		prompt += `\n\n**Schema:** (use IDs when editing/removing)\n${schemaDescription}`;
 	}
 
-	// Add document analyses as persistent memory
+	// Document memory
 	if (documentAnalyses && documentAnalyses.length > 0) {
-		prompt += '\n\n## DOCUMENT MEMORY (previously analyzed documents)\n';
-		prompt += 'These are documents the user has shared earlier in this conversation:\n\n';
+		prompt += '\n\n**Document Memory:**\n';
 		documentAnalyses.forEach((analysis, i) => {
-			prompt += `### Document ${i + 1}: ${analysis.documentType || 'Unknown type'}\n`;
-			prompt += `${analysis.summary}\n`;
+			prompt += `\n${i + 1}. ${analysis.documentType || 'Document'}: ${analysis.summary}`;
 			if (analysis.identifiedFields && analysis.identifiedFields.length > 0) {
-				prompt += `Identified fields: ${analysis.identifiedFields.join(', ')}\n`;
+				prompt += ` (Fields: ${analysis.identifiedFields.join(', ')})`;
 			}
-			prompt += '\n';
 		});
 	}
 

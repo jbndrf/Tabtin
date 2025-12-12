@@ -241,6 +241,9 @@ export class QueueWorker {
 			// Build content array with images and extracted text
 			const contentArray: any[] = [{ type: 'text', text: prompt }];
 
+			// Check if OCR text should be included (default to true for backwards compatibility)
+			const includeOcrText = settings.includeOcrText ?? true;
+
 			imageData.forEach((img, index) => {
 				// Add the image
 				contentArray.push({
@@ -248,8 +251,8 @@ export class QueueWorker {
 					image_url: { url: img.dataUrl }
 				});
 
-				// Add extracted text if available
-				if (img.extractedText && img.extractedText.trim()) {
+				// Add extracted text if available and setting is enabled
+				if (includeOcrText && img.extractedText && img.extractedText.trim()) {
 					contentArray.push({
 						type: 'text',
 						text: `[Extracted text from page ${index + 1}]: ${img.extractedText}`
