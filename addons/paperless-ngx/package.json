@@ -1,0 +1,17 @@
+{
+  "name": "tabtin-addon-paperless-ngx",
+  "version": "1.0.0",
+  "description": "Paperless-ngx document import addon for Tabtin",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

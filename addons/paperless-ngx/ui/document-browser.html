@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paperless-ngx Document Browser</title>
+  <script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.1/dist/pocketbase.umd.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      padding: 16px;
+      min-height: 100vh;
+    }
+
+    .header {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .search-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .search-input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: #3b82f6;
+    }
+
+    .btn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #2563eb;
+    }
+
+    .btn-primary:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #475569;
+    }
+
+    .btn-secondary:hover {
+      background: #cbd5e1;
+    }
+
+    .btn-success {
+      background: #22c55e;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #16a34a;
+    }
+
+    .filters-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .filter-select {
+      padding: 8px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 13px;
+      background: white;
+      min-width: 140px;
+      outline: none;
+    }
+
+    .filter-select:focus {
+      border-color: #3b82f6;
+    }
+
+    .selection-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #eff6ff;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .selection-info {
+      font-size: 14px;
+      color: #1e40af;
+    }
+
+    .selection-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .project-select {
+      padding: 8px 12px;
+      border: 2px solid #3b82f6;
+      border-radius: 6px;
+      font-size: 13px;
+      background: white;
+      min-width: 180px;
+      outline: none;
+    }
+
+    .document-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .document-card {
+      background: white;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .document-card:hover {
+      border-color: #94a3b8;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+
+    .document-card.selected {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+
+    .document-thumb {
+      width: 100%;
+      height: 140px;
+      object-fit: cover;
+      background: #f1f5f9;
+    }
+
+    .document-info {
+      padding: 12px;
+    }
+
+    .document-title {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .document-meta {
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    .document-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      background: #f1f5f9;
+      border-radius: 4px;
+      color: #475569;
+    }
+
+    .checkbox {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border: 2px solid #cbd5e1;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .document-card.selected .checkbox {
+      background: #3b82f6;
+      border-color: #3b82f6;
+    }
+
+    .checkbox svg {
+      display: none;
+      width: 14px;
+      height: 14px;
+      color: white;
+    }
+
+    .document-card.selected .checkbox svg {
+      display: block;
+    }
+
+    .document-card-inner {
+      position: relative;
+    }
+
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .page-info {
+      font-size: 13px;
+      color: #64748b;
+    }
+
+    .loading {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 40px;
+      color: #64748b;
+    }
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 12px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #64748b;
+    }
+
+    .error-state {
+      text-align: center;
+      padding: 40px;
+      color: #dc2626;
+      background: #fef2f2;
+      border-radius: 8px;
+    }
+
+    .import-progress {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      right: 16px;
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #3b82f6;
+      transition: width 0.3s;
+    }
+
+    .progress-text {
+      font-size: 13px;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="search-row">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search documents...">
+      <button class="btn btn-secondary" id="searchBtn">Search</button>
+    </div>
+    <div class="filters-row">
+      <select class="filter-select" id="correspondentFilter">
+        <option value="">All Correspondents</option>
+      </select>
+      <select class="filter-select" id="documentTypeFilter">
+        <option value="">All Document Types</option>
+      </select>
+      <select class="filter-select" id="tagFilter">
+        <option value="">All Tags</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="selection-bar" id="selectionBar" style="display: none;">
+    <span class="selection-info" id="selectionInfo">0 documents selected</span>
+    <div class="selection-actions">
+      <select class="project-select" id="projectSelect">
+        <option value="">Select Project...</option>
+      </select>
+      <button class="btn btn-secondary" id="clearSelectionBtn">Clear</button>
+      <button class="btn btn-success" id="importBtn" disabled>Import to Project</button>
+    </div>
+  </div>
+
+  <div id="content">
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <span>Loading documents...</span>
+    </div>
+  </div>
+
+  <div class="pagination" id="pagination" style="display: none;">
+    <button class="btn btn-secondary" id="prevBtn">Previous</button>
+    <span class="page-info" id="pageInfo">Page 1</span>
+    <button class="btn btn-secondary" id="nextBtn">Next</button>
+  </div>
+
+  <div class="import-progress" id="importProgress" style="display: none;">
+    <div class="progress-text" id="progressText">Downloading documents...</div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+    </div>
+  </div>
+
+  <script>
+    // Parse context from URL
+    const params = new URLSearchParams(window.location.search);
+    const ctx = JSON.parse(decodeURIComponent(params.get('ctx') || '{}'));
+    const token = params.get('token') || '';
+
+    // Get base URL for API calls
+    // When loaded via proxy (/api/addons/proxy/[addonId]/...), use the proxy path
+    // When loaded directly, use the origin
+    const baseUrl = (() => {
+      const pathname = window.location.pathname;
+      const proxyMatch = pathname.match(/^(\/api\/addons\/proxy\/[^/]+)/);
+      if (proxyMatch) {
+        // Loaded via proxy - use proxy base path
+        return window.location.origin + proxyMatch[1];
+      }
+      // Direct access - use origin (addon's own server)
+      return window.location.origin;
+    })();
+
+    // Initialize PocketBase for app data access (projects, batches)
+    // Use the same origin since we're proxied through the app
+    const pb = new PocketBase(window.location.origin);
+
+    // State
+    let documents = [];
+    let selectedIds = new Set();
+    let currentPage = 1;
+    let totalCount = 0;
+    const pageSize = 25;
+    let projects = [];
+
+    // DOM elements
+    const searchInput = document.getElementById('searchInput');
+    const searchBtn = document.getElementById('searchBtn');
+    const correspondentFilter = document.getElementById('correspondentFilter');
+    const documentTypeFilter = document.getElementById('documentTypeFilter');
+    const tagFilter = document.getElementById('tagFilter');
+    const content = document.getElementById('content');
+    const loading = document.getElementById('loading');
+    const selectionBar = document.getElementById('selectionBar');
+    const selectionInfo = document.getElementById('selectionInfo');
+    const clearSelectionBtn = document.getElementById('clearSelectionBtn');
+    const importBtn = document.getElementById('importBtn');
+    const projectSelect = document.getElementById('projectSelect');
+    const pagination = document.getElementById('pagination');
+    const pageInfo = document.getElementById('pageInfo');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const importProgress = document.getElementById('importProgress');
+    const progressText = document.getElementById('progressText');
+    const progressFill = document.getElementById('progressFill');
+
+    // Helper to make authenticated API calls to addon
+    async function apiCall(endpoint) {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
+        headers: { 'X-Tabtin-Auth': token }
+      });
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    // Load projects from main app
+    async function loadProjects() {
+      try {
+        // Use PocketBase to fetch projects for current user
+        const records = await pb.collection('projects').getFullList({
+          sort: '-created',
+          requestKey: 'loadProjects_' + Date.now()
+        });
+
+        projects = records;
+
+        // Populate project dropdown
+        projectSelect.innerHTML = '<option value="">Select Project...</option>';
+        projects.forEach(project => {
+          const option = document.createElement('option');
+          option.value = project.id;
+          option.textContent = project.name;
+          projectSelect.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading projects:', error);
+        // Show error in dropdown
+        projectSelect.innerHTML = '<option value="">Failed to load projects</option>';
+      }
+    }
+
+    // Load filter options from Paperless
+    async function loadFilters() {
+      try {
+        const [correspondents, documentTypes, tags] = await Promise.all([
+          apiCall('/correspondents'),
+          apiCall('/document_types'),
+          apiCall('/tags')
+        ]);
+
+        if (correspondents.success) {
+          correspondents.data.results.forEach(c => {
+            const option = document.createElement('option');
+            option.value = c.id;
+            option.textContent = c.name;
+            correspondentFilter.appendChild(option);
+          });
+        }
+
+        if (documentTypes.success) {
+          documentTypes.data.results.forEach(dt => {
+            const option = document.createElement('option');
+            option.value = dt.id;
+            option.textContent = dt.name;
+            documentTypeFilter.appendChild(option);
+          });
+        }
+
+        if (tags.success) {
+          tags.data.results.forEach(t => {
+            const option = document.createElement('option');
+            option.value = t.id;
+            option.textContent = t.name;
+            tagFilter.appendChild(option);
+          });
+        }
+      } catch (error) {
+        console.error('Error loading filters:', error);
+      }
+    }
+
+    // Load documents from Paperless
+    async function loadDocuments() {
+      loading.style.display = 'flex';
+      content.innerHTML = '';
+      content.appendChild(loading);
+
+      try {
+        const params = new URLSearchParams({
+          page: currentPage,
+          page_size: pageSize
+        });
+
+        const query = searchInput.value.trim();
+        if (query) params.set('query', query);
+
+        const correspondent = correspondentFilter.value;
+        if (correspondent) params.set('correspondent', correspondent);
+
+        const documentType = documentTypeFilter.value;
+        if (documentType) params.set('document_type', documentType);
+
+        const tag = tagFilter.value;
+        if (tag) params.set('tags', tag);
+
+        const result = await apiCall(`/documents?${params}`);
+
+        if (result.success) {
+          documents = result.data.results || [];
+          totalCount = result.data.count || 0;
+          renderDocuments();
+          updatePagination();
+        } else {
+          showError('Failed to load documents');
+        }
+      } catch (error) {
+        console.error('Error loading documents:', error);
+        showError(error.message);
+      }
+    }
+
+    // Render document grid
+    function renderDocuments() {
+      if (documents.length === 0) {
+        content.innerHTML = '<div class="empty-state">No documents found</div>';
+        pagination.style.display = 'none';
+        return;
+      }
+
+      const grid = document.createElement('div');
+      grid.className = 'document-grid';
+
+      documents.forEach(doc => {
+        const card = document.createElement('div');
+        card.className = `document-card${selectedIds.has(doc.id) ? ' selected' : ''}`;
+        card.onclick = () => toggleSelection(doc.id);
+
+        const thumbUrl = `${baseUrl}/documents/${doc.id}/thumb`;
+
+        card.innerHTML = `
+          <div class="document-card-inner">
+            <div class="checkbox">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <img class="document-thumb" src="${thumbUrl}" alt="" onerror="this.style.display='none'">
+          </div>
+          <div class="document-info">
+            <div class="document-title" title="${doc.title || 'Untitled'}">${doc.title || 'Untitled'}</div>
+            <div class="document-meta">
+              ${doc.correspondent ? doc.correspondent.name : 'No correspondent'}
+              ${doc.created ? ' - ' + new Date(doc.created).toLocaleDateString() : ''}
+            </div>
+            ${doc.tags && doc.tags.length > 0 ? `
+              <div class="document-tags">
+                ${doc.tags.slice(0, 3).map(t => `<span class="tag">${t.name}</span>`).join('')}
+                ${doc.tags.length > 3 ? `<span class="tag">+${doc.tags.length - 3}</span>` : ''}
+              </div>
+            ` : ''}
+          </div>
+        `;
+
+        grid.appendChild(card);
+      });
+
+      content.innerHTML = '';
+      content.appendChild(grid);
+    }
+
+    // Toggle document selection
+    function toggleSelection(id) {
+      if (selectedIds.has(id)) {
+        selectedIds.delete(id);
+      } else {
+        selectedIds.add(id);
+      }
+      updateSelectionUI();
+      renderDocuments();
+    }
+
+    // Update selection UI
+    function updateSelectionUI() {
+      const count = selectedIds.size;
+      selectionBar.style.display = count > 0 ? 'flex' : 'none';
+      selectionInfo.textContent = `${count} document${count !== 1 ? 's' : ''} selected`;
+      updateImportButton();
+    }
+
+    // Update import button state
+    function updateImportButton() {
+      const hasSelection = selectedIds.size > 0;
+      const hasProject = projectSelect.value !== '';
+      importBtn.disabled = !(hasSelection && hasProject);
+    }
+
+    // Update pagination
+    function updatePagination() {
+      const totalPages = Math.ceil(totalCount / pageSize);
+      pagination.style.display = totalPages > 1 ? 'flex' : 'none';
+      pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+      prevBtn.disabled = currentPage === 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    // Show error
+    function showError(message) {
+      content.innerHTML = `<div class="error-state">${message}</div>`;
+    }
+
+    // Import selected documents to project
+    async function importDocuments() {
+      const projectId = projectSelect.value;
+      if (!projectId || selectedIds.size === 0) return;
+
+      importBtn.disabled = true;
+      importProgress.style.display = 'block';
+
+      const ids = Array.from(selectedIds);
+      let successCount = 0;
+
+      try {
+        for (let i = 0; i < ids.length; i++) {
+          const docId = ids[i];
+          progressText.textContent = `Downloading document ${i + 1} of ${ids.length}...`;
+          progressFill.style.width = `${((i + 0.5) / ids.length) * 100}%`;
+
+          try {
+            // Download PDF from Paperless
+            const result = await apiCall(`/documents/${docId}/download`);
+            if (!result.success) {
+              console.error(`Failed to download document ${docId}`);
+              continue;
+            }
+
+            progressText.textContent = `Uploading document ${i + 1} of ${ids.length}...`;
+
+            // Convert base64 to File
+            const base64 = result.data.base64;
+            const filename = result.data.filename;
+            const mimeType = result.data.mimeType;
+
+            const bstr = atob(base64);
+            let n = bstr.length;
+            const u8arr = new Uint8Array(n);
+            while (n--) {
+              u8arr[n] = bstr.charCodeAt(n);
+            }
+            const file = new File([u8arr], filename, { type: mimeType });
+
+            // Create batch in PocketBase
+            const batch = await pb.collection('image_batches').create({
+              project: projectId,
+              status: 'pending'
+            }, { requestKey: `createBatch_${docId}_${Date.now()}` });
+
+            // Upload image to batch
+            await pb.collection('images').create({
+              batch: batch.id,
+              order: 1,
+              image: file
+            }, { requestKey: `uploadImage_${docId}_${Date.now()}` });
+
+            // Enqueue for processing
+            await fetch('/api/queue/enqueue', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                batchId: batch.id,
+                projectId: projectId,
+                priority: 10
+              })
+            });
+
+            successCount++;
+            progressFill.style.width = `${((i + 1) / ids.length) * 100}%`;
+
+          } catch (error) {
+            console.error(`Error importing document ${docId}:`, error);
+          }
+        }
+
+        // Show success message via parent
+        if (successCount > 0) {
+          window.parent.postMessage({
+            type: 'TOAST',
+            payload: {
+              message: `${successCount} document${successCount !== 1 ? 's' : ''} imported to project`,
+              variant: 'success'
+            }
+          }, '*');
+        }
+
+        // Reset selection
+        selectedIds.clear();
+        updateSelectionUI();
+        renderDocuments();
+
+      } catch (error) {
+        console.error('Import failed:', error);
+        window.parent.postMessage({
+          type: 'TOAST',
+          payload: {
+            message: 'Failed to import documents',
+            variant: 'error'
+          }
+        }, '*');
+      } finally {
+        importProgress.style.display = 'none';
+        importBtn.disabled = false;
+      }
+    }
+
+    // Event listeners
+    searchBtn.onclick = () => {
+      currentPage = 1;
+      loadDocuments();
+    };
+
+    searchInput.onkeypress = (e) => {
+      if (e.key === 'Enter') {
+        currentPage = 1;
+        loadDocuments();
+      }
+    };
+
+    correspondentFilter.onchange = () => {
+      currentPage = 1;
+      loadDocuments();
+    };
+
+    documentTypeFilter.onchange = () => {
+      currentPage = 1;
+      loadDocuments();
+    };
+
+    tagFilter.onchange = () => {
+      currentPage = 1;
+      loadDocuments();
+    };
+
+    clearSelectionBtn.onclick = () => {
+      selectedIds.clear();
+      updateSelectionUI();
+      renderDocuments();
+    };
+
+    projectSelect.onchange = updateImportButton;
+
+    importBtn.onclick = importDocuments;
+
+    prevBtn.onclick = () => {
+      if (currentPage > 1) {
+        currentPage--;
+        loadDocuments();
+      }
+    };
+
+    nextBtn.onclick = () => {
+      const totalPages = Math.ceil(totalCount / pageSize);
+      if (currentPage < totalPages) {
+        currentPage++;
+        loadDocuments();
+      }
+    };
+
+    // Initial load
+    loadProjects();
+    loadFilters();
+    loadDocuments();
+  </script>
+</body>
+</html>

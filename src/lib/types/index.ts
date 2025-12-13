@@ -9,3 +9,6 @@ export interface User {
 
 // Export PocketBase record types when generated
 // export * from './pocketbase-types';
+
+// Addon types
+export * from './addon';

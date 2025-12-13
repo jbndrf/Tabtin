@@ -4,7 +4,7 @@ import PocketBase from 'pocketbase';
 import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
-import { convertPdfToImagesAsync, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
+import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
 import { buildModularPrompt } from '$lib/prompt-presets';
 import { withFeatureFlagDefaults, createExtractionResult, type ExtractionFeatureFlags, type ExtractionResultInput } from '$lib/types/extraction';
 import { getBboxOrder } from '$lib/utils/coordinates';
@@ -208,8 +208,8 @@ export class QueueWorker {
 					const arrayBuffer = await blob.arrayBuffer();
 					const buffer = Buffer.from(arrayBuffer);
 
-					// Convert PDF to images using worker thread (non-blocking)
-					const convertedPages = await convertPdfToImagesAsync(buffer, img.image, pdfOptions);
+					// Convert PDF to images
+					const convertedPages = await convertPdfToImages(buffer, img.image, pdfOptions);
 
 					// Add each page as a separate image
 					for (const page of convertedPages) {

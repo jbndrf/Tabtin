@@ -36,6 +36,9 @@ RUN npm ci --production
 # Copy built application from builder
 COPY --from=builder /app/build ./build
 
+# Copy addons directory for building addon images
+COPY --from=builder /app/addons ./addons
+
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 

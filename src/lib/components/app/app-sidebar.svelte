@@ -5,12 +5,25 @@
 	import ThemeToggle from '$lib/components/theme/theme-toggle.svelte';
 	import LanguageSelector from '$lib/components/language/language-selector.svelte';
 	import { t } from '$lib/i18n';
-	import { LayoutDashboard, FolderKanban, LogOut, Settings, ChevronDown } from 'lucide-svelte';
+	import {
+		LayoutDashboard,
+		FolderKanban,
+		LogOut,
+		Settings,
+		ChevronDown,
+		Puzzle
+	} from 'lucide-svelte';
 	import { page } from '$app/stores';
 	import { enhance } from '$app/forms';
 	import type { ProjectsResponse } from '$lib/pocketbase-types';
+	import { menuItemsForSection } from '$lib/stores/addons';
 
 	let { projects = [] }: { projects?: ProjectsResponse[] } = $props();
+
+	// Addon menu items for each section
+	const mainMenuItems = menuItemsForSection('main');
+	const projectsMenuItems = menuItemsForSection('projects');
+	const footerMenuItems = menuItemsForSection('footer');
 
 	// Track expanded projects
 	let expandedProjects = $state<Set<string>>(new Set());
@@ -54,6 +67,26 @@
 							</Sidebar.MenuButton>
 						</a>
 					</Sidebar.MenuItem>
+					<Sidebar.MenuItem>
+						<a href="/settings" class="w-full">
+							<Sidebar.MenuButton isActive={isActive('/settings')}>
+								<Settings class="h-4 w-4" />
+								<span>{t('nav.settings')}</span>
+							</Sidebar.MenuButton>
+						</a>
+					</Sidebar.MenuItem>
+
+					<!-- Addon menu items for 'main' section -->
+					{#each $mainMenuItems as { item } (item.id)}
+						<Sidebar.MenuItem>
+							<a href={item.href} class="w-full">
+								<Sidebar.MenuButton isActive={isActive(item.href)}>
+									<Puzzle class="h-4 w-4" />
+									<span>{item.label}</span>
+								</Sidebar.MenuButton>
+							</a>
+						</Sidebar.MenuItem>
+					{/each}
 				</Sidebar.Menu>
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
@@ -102,23 +135,52 @@
 							</div>
 						</Sidebar.MenuItem>
 					{/each}
+
+					<!-- Addon menu items for 'projects' section -->
+					{#each $projectsMenuItems as { item } (item.id)}
+						<Sidebar.MenuItem>
+							<a href={item.href} class="w-full">
+								<Sidebar.MenuButton isActive={isActive(item.href)}>
+									<Puzzle class="h-4 w-4" />
+									<span>{item.label}</span>
+								</Sidebar.MenuButton>
+							</a>
+						</Sidebar.MenuItem>
+					{/each}
 				</Sidebar.Menu>
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
 	</Sidebar.Content>
 
 	<Sidebar.Footer>
-		<div class="flex items-center justify-between gap-2 p-2">
-			<div class="flex items-center gap-2">
-				<ThemeToggle />
-				<LanguageSelector />
+		<div class="flex flex-col gap-2 p-2">
+			<!-- Addon menu items for 'footer' section -->
+			{#if $footerMenuItems.length > 0}
+				<div class="flex flex-col gap-1">
+					{#each $footerMenuItems as { item } (item.id)}
+						<a href={item.href} class="w-full">
+							<Button variant="ghost" size="sm" class="w-full justify-start">
+								<Puzzle class="mr-2 h-4 w-4" />
+								<span>{item.label}</span>
+							</Button>
+						</a>
+					{/each}
+				</div>
+				<Separator />
+			{/if}
+
+			<div class="flex items-center justify-between gap-2">
+				<div class="flex items-center gap-2">
+					<ThemeToggle />
+					<LanguageSelector />
+				</div>
+				<form method="POST" action="/logout" use:enhance class="flex-1">
+					<Button type="submit" variant="ghost" size="sm" class="w-full justify-start">
+						<LogOut class="mr-2 h-4 w-4" />
+						<span>{t('nav.logout')}</span>
+					</Button>
+				</form>
 			</div>
-			<form method="POST" action="/logout" use:enhance class="flex-1">
-				<Button type="submit" variant="ghost" size="sm" class="w-full justify-start">
-					<LogOut class="mr-2 h-4 w-4" />
-					<span>{t('nav.logout')}</span>
-				</Button>
-			</form>
 		</div>
 	</Sidebar.Footer>
 </Sidebar.Root>

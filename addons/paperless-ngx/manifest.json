@@ -1,0 +1,70 @@
+{
+  "id": "paperless-ngx",
+  "name": "Paperless-ngx Import",
+  "version": "1.0.0",
+  "description": "Import documents from Paperless-ngx for extraction",
+  "port": 8081,
+
+  "endpoints": [
+    {
+      "path": "/documents",
+      "method": "GET",
+      "description": "List/search documents from paperless-ngx"
+    },
+    {
+      "path": "/documents/:id/download",
+      "method": "GET",
+      "description": "Download document PDF as base64"
+    },
+    {
+      "path": "/correspondents",
+      "method": "GET",
+      "description": "List correspondents for filtering"
+    },
+    {
+      "path": "/document_types",
+      "method": "GET",
+      "description": "List document types for filtering"
+    },
+    {
+      "path": "/tags",
+      "method": "GET",
+      "description": "List tags for filtering"
+    }
+  ],
+
+  "ui": {
+    "menuItems": [
+      {
+        "id": "paperless-browser",
+        "label": "Paperless Import",
+        "icon": "FileText",
+        "href": "/addons/paperless-ngx/browser",
+        "section": "main"
+      }
+    ],
+    "pages": [
+      {
+        "id": "browser",
+        "path": "/browser",
+        "title": "Paperless-ngx Document Browser"
+      }
+    ]
+  },
+
+  "config_schema": {
+    "paperless_url": {
+      "type": "string",
+      "title": "Paperless-ngx URL",
+      "description": "Base URL of your Paperless-ngx instance (e.g., https://paperless.example.com)",
+      "required": true
+    },
+    "paperless_token": {
+      "type": "string",
+      "title": "API Token",
+      "description": "Paperless-ngx API token (found in Paperless-ngx User Settings)",
+      "secret": true,
+      "required": true
+    }
+  }
+}

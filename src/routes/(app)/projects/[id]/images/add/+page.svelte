@@ -3,16 +3,17 @@
 	import { Camera, Upload, X, Trash2, FileText, AlertTriangle } from 'lucide-svelte';
 	import { t } from '$lib/i18n';
 	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
+	import { Card, CardContent } from '$lib/components/ui/card';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { pb } from '$lib/stores/auth';
 	import { toast } from '$lib/utils/toast';
 	import { isPdfFile } from '$lib/utils/pdf-api';
+	import type { AddonFileData } from '$lib/types/addon';
 
 	let projectId = $page.params.id as string;
 
-	// Tab state: 'single' = Add Batch (multiple images = one batch), 'bulk' = Bulk Upload (each file = separate batch)
+	// Tab state: 'single' = Add Batch, 'bulk' = Bulk Upload
 	let activeTab = $state<'single' | 'bulk'>('single');
 
 	// State for managing images
@@ -282,10 +283,15 @@
 		}
 	}
 
-	// Helper to convert base64 back to File
+	// Helper to convert base64 back to File (handles both raw base64 and data URLs)
 	function base64ToFile(base64: string, filename: string, mimeType: string): File {
-		const arr = base64.split(',');
-		const bstr = atob(arr[1]);
+		// Handle both raw base64 and data URL format
+		let rawBase64 = base64;
+		if (base64.includes(',')) {
+			// Data URL format: data:mime/type;base64,ABC123...
+			rawBase64 = base64.split(',')[1];
+		}
+		const bstr = atob(rawBase64);
 		let n = bstr.length;
 		const u8arr = new Uint8Array(n);
 		while (n--) {
@@ -298,6 +304,21 @@
 	async function loadPendingImages(filesData: { name: string; type: string; data: string }[]) {
 		const files = filesData.map((f) => base64ToFile(f.data, f.name, f.type));
 		await addFiles(files);
+	}
+
+	// Handle files received from addon panels (via addon-bridge ADDON_FILES message)
+	function handleAddonFilesReceived(event: CustomEvent<{ files: AddonFileData[] }>) {
+		const { files } = event.detail;
+		if (!files || files.length === 0) return;
+
+		// Convert base64 files to File objects and add to queue
+		const convertedFiles = files.map((f) => base64ToFile(f.base64, f.filename, f.mimeType));
+		addFiles(convertedFiles);
+
+		// Switch to bulk mode so each file becomes its own batch
+		activeTab = 'bulk';
+
+		toast.success(`${files.length} document${files.length !== 1 ? 's' : ''} imported`);
 	}
 
 	// Load images from sessionStorage if fromCamera parameter is present
@@ -349,6 +370,21 @@
 	$effect(() => {
 		return () => {
 			selectedImages.forEach((img) => URL.revokeObjectURL(img.url));
+		};
+	});
+
+	// Listen for files from addon panels (via addon-bridge)
+	$effect(() => {
+		window.addEventListener(
+			'addon-files-received',
+			handleAddonFilesReceived as EventListener
+		);
+
+		return () => {
+			window.removeEventListener(
+				'addon-files-received',
+				handleAddonFilesReceived as EventListener
+			);
 		};
 	});
 </script>

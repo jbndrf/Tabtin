@@ -34,6 +34,12 @@ services:
     environment:
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090
+      - ADDON_NETWORK=tabtin-network
+      - ADDON_DATA_PATH=/app/addon-data
+      - ADDONS_DIR=/app/addons
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/addons:/app/addon-data
     ports:
       - "80:80"
     depends_on:
@@ -58,6 +64,7 @@ services:
 
 networks:
   app-network:
+    name: tabtin-network
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: br-app

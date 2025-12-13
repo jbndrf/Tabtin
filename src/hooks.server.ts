@@ -60,10 +60,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 	try {
 		if (event.locals.pb.authStore.isValid) {
 			await event.locals.pb.collection('users').authRefresh();
+			// Set the user in locals for API routes
+			event.locals.user = event.locals.pb.authStore.record;
 		}
 	} catch (_) {
 		// Clear auth store if refresh fails (token expired or invalid)
 		event.locals.pb.authStore.clear();
+		event.locals.user = null;
 	}
 
 	// Redirect unauthenticated users to login (except for public routes)

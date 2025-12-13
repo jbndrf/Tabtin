@@ -6,9 +6,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import { page } from '$app/stores';
 	import { currentUser } from '$lib/stores/auth';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { pageActions } from '$lib/stores/page-actions';
 	import { projectsStore } from '$lib/stores/projects.svelte';
+	import { initAddonBridge, destroyAddonBridge } from '$lib/utils/addon-bridge';
+	import { fetchAddons } from '$lib/stores/addons';
+	import AddonPanel from '$lib/components/addons/AddonPanel.svelte';
 
 	let { children }: { children: any } = $props();
 
@@ -17,6 +20,14 @@
 		if ($currentUser?.id) {
 			projectsStore.loadProjects($currentUser.id);
 		}
+		// Initialize addon bridge for postMessage communication
+		initAddonBridge();
+		// Load installed addons
+		fetchAddons();
+	});
+
+	onDestroy(() => {
+		destroyAddonBridge();
 	});
 
 	// Derive page title from URL
@@ -86,5 +97,7 @@
 				<MobileNav />
 			</div>
 		</SidebarInset>
+		<!-- Floating addon panel -->
+		<AddonPanel />
 	</SidebarProvider>
 {/if}
