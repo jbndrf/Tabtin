@@ -5,7 +5,7 @@ import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
 import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
-import { buildModularPrompt } from '$lib/prompt-presets';
+import { buildModularPrompt, buildPerPagePrompt, formatExtractionsAsToon } from '$lib/prompt-presets';
 import { withFeatureFlagDefaults, createExtractionResult, type ExtractionFeatureFlags, type ExtractionResultInput } from '$lib/types/extraction';
 import { getBboxOrder } from '$lib/utils/coordinates';
 import { findColumnByKeyOrName } from '$lib/utils/column-matcher';
@@ -236,48 +236,144 @@ export class QueueWorker {
 
 			// Generate prompt using modular builder
 			const bboxOrder = getBboxOrder(settings.coordinateFormat);
-			const prompt = this.generatePrompt(settings.columns, featureFlags, bboxOrder);
-
-			// Build content array with images and extracted text
-			const contentArray: any[] = [{ type: 'text', text: prompt }];
-
-			// Check if OCR text should be included (default to true for backwards compatibility)
 			const includeOcrText = settings.includeOcrText ?? true;
 
-			imageData.forEach((img, index) => {
-				// Add the image
-				contentArray.push({
-					type: 'image_url',
-					image_url: { url: img.dataUrl }
+			let parsedData: any[];
+			let extractedRows: any[][];
+			let totalTokensUsed = 0;
+
+			// Check if per-page extraction is enabled and we have multiple pages
+			if (featureFlags.perPageExtraction && imageData.length > 1) {
+				// Per-page extraction mode: process each page separately with context
+				console.log(`[Per-Page Mode] Processing ${imageData.length} pages sequentially`);
+
+				let allExtractions: any[] = [];
+				let currentRowIndexOffset = 0;
+
+				for (let pageIdx = 0; pageIdx < imageData.length; pageIdx++) {
+					const pageImage = imageData[pageIdx];
+					const currentPage = pageIdx + 1;
+					const totalPages = imageData.length;
+
+					console.log(`[Per-Page Mode] Processing page ${currentPage}/${totalPages}`);
+
+					// Format previous extractions as TOON for context
+					const previousExtractions = allExtractions.length > 0
+						? formatExtractionsAsToon(allExtractions, featureFlags, bboxOrder)
+						: undefined;
+
+					// Build context-aware prompt for this page
+					const pagePrompt = buildPerPagePrompt({
+						columns: settings.columns,
+						featureFlags,
+						bboxOrder,
+						currentPage,
+						totalPages,
+						previousExtractions
+					});
+
+					// Build content for single page
+					const pageContent: any[] = [
+						{ type: 'text', text: pagePrompt },
+						{ type: 'image_url', image_url: { url: pageImage.dataUrl } }
+					];
+
+					// Add OCR text if available
+					if (includeOcrText && pageImage.extractedText?.trim()) {
+						pageContent.push({
+							type: 'text',
+							text: `[Extracted text from this page]: ${pageImage.extractedText}`
+						});
+					}
+
+					// Call LLM for this page
+					const pageResult = await this.callLlmApi(pageContent, settings);
+					totalTokensUsed += pageResult.usage?.total_tokens || 0;
+
+					// Parse response
+					const pageRawContent = pageResult.choices[0].message.content;
+					const pageExtractions = this.parseAndTransformLLMResponse(
+						pageRawContent,
+						settings.columns,
+						featureFlags,
+						settings.coordinateFormat
+					);
+
+					console.log(`[Per-Page Mode] Page ${currentPage} returned ${pageExtractions.length} extractions`);
+
+					// Adjust row_index and image_index for this page's extractions
+					// Find the max row_index in this page's extractions
+					let maxPageRowIndex = -1;
+					const adjustedExtractions = pageExtractions.map((e: any) => {
+						const adjustedRowIndex = (e.row_index ?? 0) + currentRowIndexOffset;
+						if (e.row_index !== undefined && e.row_index > maxPageRowIndex) {
+							maxPageRowIndex = e.row_index;
+						}
+						return {
+							...e,
+							row_index: adjustedRowIndex,
+							image_index: pageIdx // Set to actual page index
+						};
+					});
+
+					allExtractions.push(...adjustedExtractions);
+
+					// Update offset for next page (based on max row_index seen + 1)
+					if (maxPageRowIndex >= 0) {
+						currentRowIndexOffset += maxPageRowIndex + 1;
+					}
+				}
+
+				parsedData = allExtractions;
+				console.log(`[Per-Page Mode] Total extractions from all pages: ${parsedData.length}`);
+
+				// Parse into rows
+				extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
+				console.log(`[Per-Page Mode] Grouped into ${extractedRows.length} rows`);
+
+			} else {
+				// Standard all-at-once extraction
+				const prompt = this.generatePrompt(settings.columns, featureFlags, bboxOrder);
+
+				// Build content array with images and extracted text
+				const contentArray: any[] = [{ type: 'text', text: prompt }];
+
+				imageData.forEach((img, index) => {
+					// Add the image
+					contentArray.push({
+						type: 'image_url',
+						image_url: { url: img.dataUrl }
+					});
+
+					// Add extracted text if available and setting is enabled
+					if (includeOcrText && img.extractedText && img.extractedText.trim()) {
+						contentArray.push({
+							type: 'text',
+							text: `[Extracted text from page ${index + 1}]: ${img.extractedText}`
+						});
+					}
 				});
 
-				// Add extracted text if available and setting is enabled
-				if (includeOcrText && img.extractedText && img.extractedText.trim()) {
+				// Add page-count reminder for multi-page documents
+				if (imageData.length > 1) {
 					contentArray.push({
 						type: 'text',
-						text: `[Extracted text from page ${index + 1}]: ${img.extractedText}`
+						text: `REMINDER: You have been given ${imageData.length} pages. Extract ALL matching items from ALL ${imageData.length} pages. Do not stop early.`
 					});
 				}
-			});
 
-			// Add page-count reminder for multi-page documents
-			if (imageData.length > 1) {
-				contentArray.push({
-					type: 'text',
-					text: `REMINDER: You have been given ${imageData.length} pages. Extract ALL matching items from ALL ${imageData.length} pages. Do not stop early.`
-				});
+				// Call LLM API using unified method
+				const result = await this.callLlmApi(contentArray, settings);
+				totalTokensUsed = result.usage?.total_tokens || 0;
+
+				// Parse and transform LLM response using unified method
+				const rawContent = result.choices[0].message.content;
+				parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags, settings.coordinateFormat);
+
+				// Always use multi-row parsing (single-row is just multi-row with one item)
+				extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
+				console.log(`Parsed ${extractedRows.length} rows from LLM response`);
 			}
-
-			// Call LLM API using unified method
-			const result = await this.callLlmApi(contentArray, settings);
-
-			// Parse and transform LLM response using unified method
-			const rawContent = result.choices[0].message.content;
-			const parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags, settings.coordinateFormat);
-
-			// Always use multi-row parsing (single-row is just multi-row with one item)
-			const extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
-			console.log(`Parsed ${extractedRows.length} rows from LLM response`);
 
 			// Create extraction_rows records using batch API for better performance
 			// NOTE: PocketBase treats 0 as blank for required numeric fields, so we use 1-based indexing
@@ -320,7 +416,7 @@ export class QueueWorker {
 				imageCount: images.length,
 				extractionCount: parsedData.length,
 				modelUsed: settings.modelName,
-				tokensUsed: result.usage?.total_tokens || null
+				tokensUsed: totalTokensUsed || null
 			});
 		} catch (error: any) {
 			// Mark batch as failed

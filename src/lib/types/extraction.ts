@@ -3,13 +3,15 @@ export interface ExtractionFeatureFlags {
 	confidenceScores: boolean;
 	multiRowExtraction: boolean;
 	toonOutput: boolean;
+	perPageExtraction: boolean;
 }
 
 export const DEFAULT_FEATURE_FLAGS: ExtractionFeatureFlags = {
 	boundingBoxes: true,
 	confidenceScores: true,
 	multiRowExtraction: false,
-	toonOutput: false
+	toonOutput: false,
+	perPageExtraction: false
 };
 
 export function withFeatureFlagDefaults(

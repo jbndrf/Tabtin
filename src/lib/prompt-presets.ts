@@ -85,6 +85,8 @@ Row indexing:
 - If the document contains only ONE item, still use row_index: 0
 - Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row
 
+IMPORTANT: Only extract items that are actually visible. If a page contains no extractable items (cover page, terms, blank), skip it. Do NOT hallucinate or invent data.
+
 INCOMPLETE EXTRACTION IS UNACCEPTABLE. Verify every page has been processed.`;
 
 // Image index instructions (always included since image_index is in output format)
@@ -365,6 +367,161 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 	prompt += generateImportantNotes(featureFlags, featureFlags.toonOutput);
 
 	return prompt;
+}
+
+/**
+ * Extended config for per-page extraction prompts
+ */
+export interface PerPagePromptConfig extends PromptBuilderConfig {
+	currentPage: number;
+	totalPages: number;
+	previousExtractions?: string; // TOON-formatted data from prior pages
+}
+
+/**
+ * Build a prompt for per-page extraction mode
+ * Each page is processed separately with context from previous pages
+ */
+export function buildPerPagePrompt(config: PerPagePromptConfig): string {
+	const { columns, featureFlags, bboxOrder = '[x1, y1, x2, y2]', currentPage, totalPages, previousExtractions } = config;
+
+	// Start with page context
+	let prompt = `PAGE CONTEXT:
+You are extracting data from page ${currentPage} of ${totalPages}.
+`;
+
+	// Add previously extracted data if available
+	if (currentPage > 1 && previousExtractions) {
+		prompt += `
+PREVIOUSLY EXTRACTED DATA (pages 1-${currentPage - 1}):
+\`\`\`
+${previousExtractions}
+\`\`\`
+
+Use this context to understand the document structure and maintain consistency.
+Do NOT re-extract any items already captured above.
+`;
+	} else if (currentPage === 1) {
+		prompt += `
+This is the first page. No previous extractions yet.
+`;
+	}
+
+	// Add task instructions
+	prompt += `
+YOUR TASK:
+Extract ALL items from THIS PAGE ONLY (page ${currentPage}).
+- Extract EVERY item visible on this page - do not skip any
+- Use row_index starting from 0 (will be adjusted after extraction)
+- Use image_index: 0 for all extractions (will be adjusted to page ${currentPage - 1} after)
+- Do NOT re-extract items from previous pages
+- If an item spans multiple pages, only extract the portion visible on THIS page
+
+IMPORTANT: If this page contains NO extractable items (e.g., cover page, terms & conditions, blank page, or just headers/footers), return an EMPTY extraction with count 0. Do NOT hallucinate or invent data.
+
+`;
+
+	// Add standard extraction instructions
+	prompt += CORE_INSTRUCTIONS;
+
+	// Add feature-specific instructions
+	if (featureFlags.boundingBoxes) {
+		if (featureFlags.toonOutput) {
+			const coordFields = parseBboxOrderToFields(bboxOrder);
+			prompt += BBOX_INSTRUCTIONS_TOON(coordFields);
+		} else {
+			prompt += BBOX_INSTRUCTIONS_JSON(bboxOrder);
+		}
+	}
+
+	if (featureFlags.confidenceScores) {
+		prompt += CONFIDENCE_INSTRUCTIONS;
+	}
+
+	// Per-page mode always uses multi-row extraction
+	prompt += `
+
+MULTI-ROW EXTRACTION:
+- Each distinct item on this page should be extracted as a SEPARATE ROW
+- Add a "row_index" field (starting from 0) to group fields belonging to the same item
+- Extract ALL items visible on this page - INCOMPLETE EXTRACTION IS UNACCEPTABLE`;
+
+	// Simplified image index for single page
+	prompt += `
+
+IMAGE INDEX:
+- Use image_index: 0 for all extractions on this page (will be adjusted automatically)`;
+
+	if (featureFlags.toonOutput) {
+		prompt += TOON_INSTRUCTIONS;
+	}
+
+	// Add fields section
+	prompt += '\n\n--- FIELDS TO EXTRACT ---\n\n';
+	prompt += generateFieldsSection(columns);
+
+	// Add expected output format
+	prompt += '\n\n--- EXPECTED OUTPUT FORMAT ---\n\n';
+	prompt += generateOutputFormatSection(columns, featureFlags, bboxOrder);
+
+	// Add final important notes
+	prompt += generateImportantNotes(featureFlags, featureFlags.toonOutput);
+
+	return prompt;
+}
+
+/**
+ * Format extractions as TOON string for context in per-page mode
+ */
+export function formatExtractionsAsToon(
+	extractions: any[],
+	featureFlags: ExtractionFeatureFlags,
+	bboxOrder: string = '[x1, y1, x2, y2]'
+): string {
+	if (!extractions || extractions.length === 0) {
+		return '(no extractions yet)';
+	}
+
+	// Build field list
+	const fieldList: string[] = [];
+	if (featureFlags.multiRowExtraction) {
+		fieldList.push('row_index');
+	}
+	fieldList.push('column_id', 'column_name', 'value', 'image_index');
+
+	if (featureFlags.boundingBoxes) {
+		const coordFields = parseBboxOrderToFields(bboxOrder);
+		fieldList.push(...coordFields);
+	}
+	if (featureFlags.confidenceScores) {
+		fieldList.push('confidence');
+	}
+
+	// Build rows
+	const rows = extractions.map(e => {
+		const values: string[] = [];
+		if (featureFlags.multiRowExtraction) {
+			values.push(String(e.row_index ?? 0));
+		}
+		values.push(String(e.column_id));
+		values.push(e.column_name);
+		values.push(e.value ?? 'null');
+		values.push(String(e.image_index ?? 0));
+
+		if (featureFlags.boundingBoxes && e.bbox_2d) {
+			values.push(...e.bbox_2d.map((v: number) => String(v)));
+		} else if (featureFlags.boundingBoxes) {
+			values.push('0', '0', '0', '0');
+		}
+		if (featureFlags.confidenceScores) {
+			values.push(String(e.confidence ?? 0));
+		}
+
+		return '  ' + values.join('\t');
+	});
+
+	const header = `extractions[${extractions.length}]{${fieldList.join(',')}}:`;
+	return header + '\n' + rows.join('\n');
 }
 
 export const PROMPT_PRESETS: Record<string, PromptPreset> = {

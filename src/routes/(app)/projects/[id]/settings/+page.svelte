@@ -1141,6 +1141,44 @@
 						</Tooltip.Root>
 					</div>
 				</div>
+
+				<!-- Per-Page Extraction Toggle (only shown when multi-row is enabled) -->
+				{#if featureFlags.multiRowExtraction}
+					<div class="space-y-2 ml-6">
+						<div class="flex items-center gap-2">
+							<div class="flex items-center space-x-2">
+								<input
+									type="checkbox"
+									id="perPageExtraction"
+									bind:checked={featureFlags.perPageExtraction}
+									class="h-4 w-4 rounded border-input"
+								/>
+								<Label for="perPageExtraction" class="cursor-pointer">Per-Page Extraction</Label>
+							</div>
+							<Tooltip.Root>
+								<Tooltip.Trigger>
+									{#snippet child({ props })}
+										<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+											<HelpCircle class="h-4 w-4" />
+										</button>
+									{/snippet}
+								</Tooltip.Trigger>
+								<Tooltip.Content>
+									<div class="max-w-xs space-y-2">
+										<div>
+											<p class="font-medium text-xs">All Pages At Once (Default)</p>
+											<p class="text-xs">Send all pages in one request. Faster but may miss items.</p>
+										</div>
+										<div>
+											<p class="font-medium text-xs">Per-Page Mode</p>
+											<p class="text-xs">Process each page separately with context from previous pages. More thorough extraction for multi-page documents.</p>
+										</div>
+									</div>
+								</Tooltip.Content>
+							</Tooltip.Root>
+						</div>
+					</div>
+				{/if}
 			</div>
 
 			<Separator />
