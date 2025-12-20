@@ -260,6 +260,14 @@ export class QueueWorker {
 				}
 			});
 
+			// Add page-count reminder for multi-page documents
+			if (imageData.length > 1) {
+				contentArray.push({
+					type: 'text',
+					text: `REMINDER: You have been given ${imageData.length} pages. Extract ALL matching items from ALL ${imageData.length} pages. Do not stop early.`
+				});
+			}
+
 			// Call LLM API using unified method
 			const result = await this.callLlmApi(contentArray, settings);
 

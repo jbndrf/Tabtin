@@ -69,14 +69,23 @@ Confidence Score Instructions:
 // Multi-row instructions (conditionally included)
 const MULTI_ROW_INSTRUCTIONS = `
 
-MULTI-ROW EXTRACTION:
-CRITICAL: This document may contain MULTIPLE ITEMS/TRANSACTIONS/ENTRIES (e.g., bank statement with multiple transactions, receipt with multiple line items, invoice with multiple products).
+MULTI-ROW EXTRACTION - EXHAUSTIVE:
+CRITICAL: You MUST extract EVERY SINGLE matching item visible across ALL pages. Do NOT stop early.
 
-Multi-row instructions:
-- Each distinct item/transaction/entry should be extracted as a SEPARATE ROW
+Exhaustive extraction rules:
+- Scan EVERY page in the document from start to finish
+- Extract ALL items that match the schema from EVERY page
+- Continue until you have captured the LAST item on the LAST page
+- Do NOT stop after processing the first page or first few items
+- If there are multiple pages, ensure EACH page is fully processed
+
+Row indexing:
+- Each distinct item should be extracted as a SEPARATE ROW
 - Add a "row_index" field (starting from 0) to group fields belonging to the same item
 - If the document contains only ONE item, still use row_index: 0
-- Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row`;
+- Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row
+
+INCOMPLETE EXTRACTION IS UNACCEPTABLE. Verify every page has been processed.`;
 
 // Image index instructions (always included since image_index is in output format)
 const IMAGE_INDEX_INSTRUCTIONS = `

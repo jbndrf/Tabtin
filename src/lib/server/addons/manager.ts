@@ -5,7 +5,7 @@
 import PocketBase from 'pocketbase';
 import { randomBytes } from 'crypto';
 import type { InstalledAddon, AddonManifest, AddonContainerStatus } from '$lib/types/addon';
-import { POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import {
 	buildImage,
@@ -459,11 +459,11 @@ let addonManagerInstance: AddonManager | null = null;
  */
 export function getAddonManager(): AddonManager {
 	if (!addonManagerInstance) {
-		if (!POCKETBASE_ADMIN_EMAIL || !POCKETBASE_ADMIN_PASSWORD) {
+		if (!env.POCKETBASE_ADMIN_EMAIL || !env.POCKETBASE_ADMIN_PASSWORD) {
 			throw new Error('POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD environment variables are required');
 		}
 
-		addonManagerInstance = new AddonManager(POCKETBASE_URL, POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD);
+		addonManagerInstance = new AddonManager(POCKETBASE_URL, env.POCKETBASE_ADMIN_EMAIL, env.POCKETBASE_ADMIN_PASSWORD);
 	}
 
 	return addonManagerInstance;
