@@ -5,7 +5,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import BatchDataViewer from '$lib/components/projects/batch-data-viewer.svelte';
 	import { t } from '$lib/i18n';
-	import { ArrowLeft, Play, Eye, Trash2, Image as ImageIcon, RefreshCcw, ChevronDown } from 'lucide-svelte';
+	import { ArrowLeft, Play, Eye, Trash2, Image as ImageIcon, RefreshCcw, ChevronDown, FileText } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import type { ImageBatchesResponse, ImagesResponse } from '$lib/pocketbase-types';
@@ -140,6 +140,10 @@
 
 	function getBatchStatusLabel(status: string) {
 		return t(`images.gallery.status.${status}`);
+	}
+
+	function isPdfFile(filename: string): boolean {
+		return filename?.toLowerCase().endsWith('.pdf');
 	}
 
 	async function changeBatchStatus(targetStatus: 'pending' | 'review' | 'approved' | 'failed') {
@@ -353,13 +357,20 @@
 							<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
 								{#each images as image, index}
 									<div class="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
-										<img
-											src={pb.files.getUrl(image, image.image, { thumb: '300x300' })}
-											alt="Image {index + 1}"
-											class="h-full w-full object-cover transition-transform group-hover:scale-105"
-										/>
+										{#if isPdfFile(image.image)}
+											<div class="flex h-full w-full flex-col items-center justify-center bg-muted">
+												<FileText class="h-12 w-12 text-muted-foreground" />
+												<span class="mt-2 text-xs font-medium text-muted-foreground">PDF</span>
+											</div>
+										{:else}
+											<img
+												src={pb.files.getUrl(image, image.image, { thumb: '300x300' })}
+												alt="Image {index + 1}"
+												class="h-full w-full object-cover transition-transform group-hover:scale-105"
+											/>
+										{/if}
 										<div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
-											<p class="text-xs text-white">Image {index + 1}</p>
+											<p class="text-xs text-white">{isPdfFile(image.image) ? 'PDF' : 'Image'} {index + 1}</p>
 										</div>
 									</div>
 								{/each}

@@ -5,7 +5,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { t } from '$lib/i18n';
-	import { Upload, ImageIcon, Play, Trash2, X, Check, RotateCw, ChevronDown, RefreshCcw, CheckSquare } from 'lucide-svelte';
+	import { Upload, ImageIcon, Play, Trash2, X, Check, RotateCw, ChevronDown, RefreshCcw, CheckSquare, FileText } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, isProjectLoading } from '$lib/stores/project-data';
@@ -146,6 +146,10 @@
 
 	function getBatchStatusLabel(status: string) {
 		return t(`images.gallery.status.${status}`);
+	}
+
+	function isPdfFile(filename: string): boolean {
+		return filename?.toLowerCase().endsWith('.pdf');
 	}
 
 	function handleBatchClick(batchId: string, event: MouseEvent) {
@@ -764,11 +768,18 @@
 							>
 								<!-- Image -->
 								{#if batch.firstImage}
-									<img
-										src={pb.files.getUrl(batch.firstImage, batch.firstImage.image, { thumb: '300x300' })}
-										alt={t('images.gallery.batch_thumbnail')}
-										class="h-full w-full object-cover transition-transform group-hover:scale-105 {selectedBatches.has(batch.id) ? 'opacity-60' : ''}"
-									/>
+									{#if isPdfFile(batch.firstImage.image)}
+										<div class="flex h-full w-full flex-col items-center justify-center bg-muted {selectedBatches.has(batch.id) ? 'opacity-60' : ''}">
+											<FileText class="h-12 w-12 text-muted-foreground" />
+											<span class="mt-2 text-xs font-medium text-muted-foreground">PDF</span>
+										</div>
+									{:else}
+										<img
+											src={pb.files.getUrl(batch.firstImage, batch.firstImage.image, { thumb: '300x300' })}
+											alt={t('images.gallery.batch_thumbnail')}
+											class="h-full w-full object-cover transition-transform group-hover:scale-105 {selectedBatches.has(batch.id) ? 'opacity-60' : ''}"
+										/>
+									{/if}
 								{:else}
 									<div class="flex h-full w-full items-center justify-center">
 										<ImageIcon class="h-8 w-8 text-muted-foreground" />

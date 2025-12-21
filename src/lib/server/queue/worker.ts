@@ -282,7 +282,7 @@ export class QueueWorker {
 					if (includeOcrText && pageImage.extractedText?.trim()) {
 						pageContent.push({
 							type: 'text',
-							text: `[Extracted text from this page]: ${pageImage.extractedText}`
+							text: `[OCR reference - this page]: ${pageImage.extractedText}`
 						});
 					}
 
@@ -349,7 +349,7 @@ export class QueueWorker {
 					if (includeOcrText && img.extractedText && img.extractedText.trim()) {
 						contentArray.push({
 							type: 'text',
-							text: `[Extracted text from page ${index + 1}]: ${img.extractedText}`
+							text: `[OCR reference - page ${index + 1}]: ${img.extractedText}`
 						});
 					}
 				});

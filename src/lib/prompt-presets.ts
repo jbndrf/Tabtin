@@ -17,33 +17,160 @@ export interface PromptBuilderConfig {
 	bboxOrder?: string;
 }
 
-// Core extraction instructions (always included)
-const CORE_INSTRUCTIONS = `You are an AI assistant specialized in extracting structured data from images.
+// =============================================================================
+// CORE CONTEXT (minimal, always included)
+// =============================================================================
 
-Instructions:
-- Carefully analyze all visible text, labels, and visual elements in the image
-- Extract data for each field according to its specific description and requirements
-- Follow any format specifications, regex patterns, or allowed values exactly as defined
-- If a value is not visible or cannot be determined, use null
-- Pay attention to units, separators, and formatting requirements in field descriptions
-- If the image contains text in multiple languages, extract from all languages as specified in field descriptions
+const CORE_CONTEXT = `Extract structured data from images into a table.
+The user has defined a schema with columns and extraction instructions.
+Your output will be DISCARDED if it does not match the required format.`;
 
-Return only valid JSON in the exact format specified. Do not include explanations, notes, markdown formatting, or any additional text outside the JSON response.`;
+// =============================================================================
+// DO/DON'T RULES - Always included
+// =============================================================================
 
-// Bounding box instructions for JSON format
-const BBOX_INSTRUCTIONS_JSON = (bboxOrder: string) => `
+const RULES_ALWAYS = `
+GENERAL RULES:
+You are extracting data from real documents. The user will review your extractions, so accuracy is critical. Only extract what you can actually see in the images.
 
-Bounding Box Instructions:
-- bbox_2d coordinates should be normalized to 0-1000 range ${bboxOrder}
-- If a field's information is NOT present, set bbox_2d to [0, 0, 0, 0]`;
+DOS:
+- DO extract only data visible in the images
+- DO use null for values not present or not visible
+- DO follow the user's field descriptions exactly
+- DO use column_id and column_name EXACTLY as shown in the schema
 
-// Bounding box instructions for TOON format (flattened coordinates)
-const BBOX_INSTRUCTIONS_TOON = (coordFields: string[]) => `
+DONTS:
+- DO NOT invent, guess, or hallucinate data not visible in images
+- DO NOT copy example values - extract from actual images only
+- DO NOT add explanations, markdown, or text outside the output format
+- DO NOT modify, abbreviate, or paraphrase column identifiers`;
 
-Bounding Box Instructions:
-- Coordinates should be normalized to 0-1000 range
-- Output coordinates as separate fields: ${coordFields.join(', ')}
-- If a field's information is NOT present, set all coordinates to 0`;
+// =============================================================================
+// DO/DON'T RULES - Feature-specific (conditionally included)
+// =============================================================================
+
+const RULES_MULTI_ROW = `
+MULTI-ROW MODE:
+The user expects multiple items (rows) from this document. Each logical item (e.g., a transaction, a line item, a record) should be grouped using row_index. All fields belonging to the same item share the same row_index.
+
+DOS:
+- DO use row_index (0, 1, 2...) to group fields of the same logical item
+- DO extract ALL matching items from ALL pages - scan every page completely
+- DO follow user field descriptions for what constitutes a "row"
+- DO follow user field descriptions for which rows each field appears on
+
+DONTS:
+- DO NOT stop early - extract until the last item on the last page
+- DO NOT create separate rows for document-level fields (unless user description says to)
+- DO NOT skip items - incomplete extraction is unacceptable`;
+
+const RULES_TOON_OUTPUT = `
+OUTPUT FORMAT: TOON
+The user has chosen TOON format instead of JSON. TOON is a compact tabular format that is easier to parse. The header declares the structure, and each indented line is one extraction with TAB-separated values.
+
+DOS:
+- DO output in TOON format with TAB character (\\t) as delimiter
+- DO match the field count in header exactly
+- DO use 2-space indentation for each row
+
+DONTS:
+- DO NOT use JSON, markdown, or any other format
+- DO NOT use spaces or commas as value delimiters
+- DO NOT add any text outside the TOON structure`;
+
+const RULES_JSON_OUTPUT = `
+OUTPUT FORMAT: JSON
+The user expects a JSON array of extractions. Each extraction is an object with the required fields.
+
+DOS:
+- DO output valid JSON in the exact structure shown
+- DO include all required fields for each extraction
+
+DONTS:
+- DO NOT add markdown code blocks around the JSON
+- DO NOT include explanations or comments`;
+
+const RULES_BOUNDING_BOXES = (bboxOrder: string) => `
+BOUNDING BOXES:
+Provide coordinates showing WHERE each value appears in the image.
+
+COORDINATE SYSTEM:
+- Values normalized to 0-1000 range (0=top/left edge, 1000=bottom/right edge)
+- Format: ${bboxOrder}
+- For multi-line values, use bbox that covers ALL lines
+
+DOS:
+- DO provide bbox for the actual text location
+- DO use [0, 0, 0, 0] for fields not present in image
+
+DONTS:
+- DO NOT guess coordinates for unclear locations
+- DO NOT use pixel values - always use 0-1000 normalized range`;
+
+const RULES_CONFIDENCE = `
+CONFIDENCE SCORES:
+The user wants to know how certain you are about each extracted value. This helps prioritize which extractions need human review. Low confidence values will be flagged for manual verification.
+
+DOS:
+- DO use 0.9+ for clearly visible, unambiguous text
+- DO use 0.5-0.9 for partially visible or ambiguous text
+- DO use 0.0 for fields not present
+
+DONTS:
+- DO NOT assign high confidence to guessed values`;
+
+const RULES_OCR_GUIDANCE = `
+OCR TEXT GUIDANCE:
+Machine-extracted OCR text is provided as supplementary help. Your visual analysis of the images is the primary source of truth.
+
+INPUT STRUCTURE:
+- Each page image is followed by its OCR text (if available)
+- OCR text is labeled: [OCR reference - page N]: <text>
+- Some pages may have no OCR text
+- Documents may be PDFs converted to images
+
+DOS:
+- DO rely primarily on what you see in the images
+- DO use OCR as a helper for small text, unclear characters, or dense content
+- DO trust your visual reading when it conflicts with OCR
+
+DONTS:
+- DO NOT copy OCR text without visual verification
+- DO NOT trust OCR over your own reading of the image
+- DO NOT assume OCR is accurate - it often has recognition errors
+- DO NOT trust OCR for layout, structure, or table organization - OCR loses spatial relationships`;
+
+const RULES_IMAGE_INDEX = `
+IMAGE INDEX:
+You may receive one or multiple images. The image_index tells the system which image each extracted value came from. This is used to display the correct image when reviewing extractions.
+
+DOS:
+- DO set image_index to the 0-based index of the image where data was found
+- DO use 0 for single image
+- DO use 0 for first image, 1 for second, etc. when multiple images`;
+
+const RULES_PER_PAGE = (currentPage: number, totalPages: number) => `
+PER-PAGE MODE (page ${currentPage} of ${totalPages}):
+This document has ${totalPages} pages. Each page is processed separately. You are looking at page ${currentPage} only.
+
+ROW INDEX HANDLING:
+- Always start row_index at 0 for THIS page
+- The system will add offsets to create global row indices
+- You do NOT need to track previous page row counts
+
+DOS:
+- DO extract from THIS PAGE ONLY
+- DO use row_index starting from 0
+- DO use image_index: 0 for all
+- DO return empty extraction if page has no extractable items
+
+DONTS:
+- DO NOT re-extract items from previous pages
+- DO NOT hallucinate items not visible on this page`;
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
 
 /**
  * Parse bboxOrder string to extract coordinate field names
@@ -56,147 +183,51 @@ function parseBboxOrderToFields(bboxOrder: string): string[] {
 		.map(s => s.trim());
 }
 
-// Confidence score instructions (conditionally included)
-const CONFIDENCE_INSTRUCTIONS = `
+// =============================================================================
+// USER SCHEMA SECTION
+// =============================================================================
 
-Confidence Score Instructions:
-- Provide a confidence score (0.0 to 1.0) indicating extraction certainty
-- Use 0.9+ for clearly visible, unambiguous text
-- Use 0.5-0.9 for partially visible or ambiguous text
-- Use 0.0-0.5 for guessed or unclear values
-- If a field's information is NOT present, set confidence to 0.0`;
+function generateUserSchemaSection(columns: ColumnDefinition[]): string {
+	let section = `--- USER SCHEMA (ABSOLUTE PRIORITY) ---
 
-// Multi-row instructions (conditionally included)
-const MULTI_ROW_INSTRUCTIONS = `
+The user has defined these columns. Follow the user's descriptions exactly.
+The descriptions define what to extract and any special handling rules.
 
-MULTI-ROW EXTRACTION - EXHAUSTIVE:
-CRITICAL: You MUST extract EVERY SINGLE matching item visible across ALL pages. Do NOT stop early.
+`;
 
-Exhaustive extraction rules:
-- Scan EVERY page in the document from start to finish
-- Extract ALL items that match the schema from EVERY page
-- Continue until you have captured the LAST item on the LAST page
-- Do NOT stop after processing the first page or first few items
-- If there are multiple pages, ensure EACH page is fully processed
-
-Row indexing:
-- Each distinct item should be extracted as a SEPARATE ROW
-- Add a "row_index" field (starting from 0) to group fields belonging to the same item
-- If the document contains only ONE item, still use row_index: 0
-- Do NOT treat multilingual text as separate rows - different language versions of the same content belong to the SAME row
-
-IMPORTANT: Only extract items that are actually visible. If a page contains no extractable items (cover page, terms, blank), skip it. Do NOT hallucinate or invent data.
-
-INCOMPLETE EXTRACTION IS UNACCEPTABLE. Verify every page has been processed.`;
-
-// Image index instructions (always included since image_index is in output format)
-const IMAGE_INDEX_INSTRUCTIONS = `
-
-IMAGE INDEX:
-- image_index indicates which image (0-based) the data was extracted from
-- Single image: use image_index: 0 for all extractions
-- Multiple images: use the index of the image where the data appears
-- Example: Data from first image = 0, data from second image = 1`;
-
-// TOON format instructions (conditionally included)
-const TOON_INSTRUCTIONS = `
-
-OUTPUT FORMAT: TOON (Token-Oriented Object Notation) with TAB delimiter
-You MUST output in TOON format, NOT JSON. TOON is a compact tabular format:
-- Header declares array length and fields: arrayName[COUNT]{field1,field2,...}:
-- Each row uses 2-space indentation with TAB-separated values (use actual tab character, not spaces)
-- null values are written as null
-- CRITICAL: Use TAB character (\\t) between values, NOT commas - this avoids issues with numbers like 97.502,48`;
-
-function generateFieldsSection(columns: ColumnDefinition[]): string {
-	return columns.map((col, index) => {
-		let field = `Field ${index + 1}:\n`;
-		field += `  ID: "${col.id}"\n`;
-		field += `  Name: "${col.name}"\n`;
-		field += `  Type: ${col.type}`;
-		if (col.description) field += `\n  Description: ${col.description}`;
-		if (col.allowedValues) field += `\n  Allowed values: ${col.allowedValues}`;
-		if (col.regex) field += `\n  Validation pattern: ${col.regex}`;
+	section += columns.map((col, index) => {
+		let field = `Column ${index + 1}:\n`;
+		field += `  column_id: "${col.id}"\n`;
+		field += `  column_name: "${col.name}"\n`;
+		field += `  type: ${col.type}`;
+		if (col.description) field += `\n  description: ${col.description}`;
+		if (col.allowedValues) {
+			field += `\n  allowed_values: ${col.allowedValues}`;
+			field += `\n  CONSTRAINT: Value MUST be one of these exactly, or null if not found`;
+		}
+		if (col.regex) field += `\n  validation_pattern: ${col.regex}`;
 		return field;
 	}).join('\n\n');
+
+	return section;
 }
+
+// =============================================================================
+// OUTPUT FORMAT SECTION - Abstract placeholders, no domain examples
+// =============================================================================
 
 function generateOutputFormatSection(
 	columns: ColumnDefinition[],
 	featureFlags: ExtractionFeatureFlags,
 	bboxOrder: string
 ): string {
-	// Use TOON format if enabled
 	if (featureFlags.toonOutput) {
-		return generateToonOutputFormatSection(columns, featureFlags, bboxOrder);
+		return generateToonFormatSection(columns, featureFlags, bboxOrder);
 	}
-
-	// Helper to build a single JSON example object
-	const buildJsonExample = (col: ColumnDefinition, rowIndex: number, imageIndex: number, isLast: boolean): string => {
-		let example = '    {\n';
-
-		if (featureFlags.multiRowExtraction) {
-			example += `      "row_index": ${rowIndex},\n`;
-		}
-
-		example += `      "column_id": "${col.id}",\n`;
-		example += `      "column_name": "${col.name}",\n`;
-		example += '      "value": "extracted value here",\n';
-		example += `      "image_index": ${imageIndex}`;
-
-		if (featureFlags.boundingBoxes) {
-			example += `,\n      "bbox_2d": ${bboxOrder}`;
-		}
-
-		if (featureFlags.confidenceScores) {
-			example += ',\n      "confidence": 0.95';
-		}
-
-		example += '\n    }' + (isLast ? '' : ',');
-		return example;
-	};
-
-	// Default JSON format
-	let format = `Return ONLY valid JSON in this exact structure. CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
-
-{
-  "extractions": [
-`;
-
-	if (featureFlags.multiRowExtraction) {
-		// Show 2 rows with first 2 columns each to demonstrate row_index incrementing
-		const columnsToShow = columns.slice(0, Math.min(2, columns.length));
-		const examples: string[] = [];
-		// Row 0 (from image 0)
-		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
-			examples.push(buildJsonExample(columnsToShow[colIdx], 0, 0, false));
-		}
-		// Row 1 (from image 1, to also show image_index varying)
-		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
-			const isLast = colIdx === columnsToShow.length - 1;
-			examples.push(buildJsonExample(columnsToShow[colIdx], 1, 1, isLast));
-		}
-		format += examples.join('\n');
-	} else {
-		// Single row: show all columns
-		format += columns.map((col, index) => {
-			const isLast = index === columns.length - 1;
-			return buildJsonExample(col, 0, 0, isLast);
-		}).join('\n');
-	}
-
-	format += '\n  ]\n}';
-
-	if (featureFlags.multiRowExtraction) {
-		format += `
-
-Note: row_index groups fields belonging to the same item (0 for first item, 1 for second, etc.)`;
-	}
-
-	return format;
+	return generateJsonFormatSection(columns, featureFlags, bboxOrder);
 }
 
-function generateToonOutputFormatSection(
+function generateToonFormatSection(
 	columns: ColumnDefinition[],
 	featureFlags: ExtractionFeatureFlags,
 	bboxOrder: string
@@ -210,7 +241,6 @@ function generateToonOutputFormatSection(
 
 	fieldList.push('column_id', 'column_name', 'value', 'image_index');
 
-	// For TOON, flatten bbox into separate coordinate fields
 	const coordFields = featureFlags.boundingBoxes ? parseBboxOrderToFields(bboxOrder) : [];
 	if (featureFlags.boundingBoxes) {
 		fieldList.push(...coordFields);
@@ -220,105 +250,126 @@ function generateToonOutputFormatSection(
 		fieldList.push('confidence');
 	}
 
-	// Helper to build a single sample row
-	const buildSampleRow = (col: ColumnDefinition, colIndex: number, rowIndex: number, imageIndex: number): string => {
+	// Build abstract example rows using actual column IDs
+	const buildAbstractRow = (col: ColumnDefinition, rowIdx: number, imgIdx: number): string => {
 		const values: string[] = [];
 
 		if (featureFlags.multiRowExtraction) {
-			values.push(String(rowIndex));
+			values.push(String(rowIdx));
 		}
 
 		values.push(col.id);
 		values.push(col.name);
-		// Show example value - with tabs, commas in values are safe
-		values.push(colIndex === 0 && rowIndex === 0 ? '1.234,56' : `sample_value_${colIndex + 1}`);
-		values.push(String(imageIndex));
+		values.push('<extracted_value>');
+		values.push(String(imgIdx));
 
 		if (featureFlags.boundingBoxes) {
-			const coordFields = parseBboxOrderToFields(bboxOrder);
-			values.push(...coordFields.map(f => `<${f}>`));
+			values.push(...coordFields.map(() => '<coord>'));
 		}
 
 		if (featureFlags.confidenceScores) {
-			values.push('0.95');
+			values.push('<conf>');
 		}
 
 		return '  ' + values.join('\t');
 	};
 
-	// Build sample rows
+	// Generate example rows
 	let sampleRows: string[];
-	let extractionCount: number;
-
-	if (featureFlags.multiRowExtraction) {
-		// Show 2 rows with first 2 columns each to demonstrate row_index incrementing
-		const columnsToShow = columns.slice(0, Math.min(2, columns.length));
-		sampleRows = [];
-		// Row 0 (from image 0)
-		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
-			sampleRows.push(buildSampleRow(columnsToShow[colIdx], colIdx, 0, 0));
-		}
-		// Row 1 (from image 1, to also show image_index varying)
-		for (let colIdx = 0; colIdx < columnsToShow.length; colIdx++) {
-			sampleRows.push(buildSampleRow(columnsToShow[colIdx], colIdx, 1, 1));
-		}
-		extractionCount = sampleRows.length;
+	if (featureFlags.multiRowExtraction && columns.length >= 2) {
+		// Show 2 logical rows with first 2 columns each
+		const cols = columns.slice(0, 2);
+		sampleRows = [
+			buildAbstractRow(cols[0], 0, 0),
+			buildAbstractRow(cols[1], 0, 0),
+			buildAbstractRow(cols[0], 1, 0),
+			buildAbstractRow(cols[1], 1, 0)
+		];
 	} else {
-		// Single row: show all columns
-		sampleRows = columns.map((col, index) => buildSampleRow(col, index, 0, 0));
-		extractionCount = columns.length;
+		// Single row with all columns
+		sampleRows = columns.map(col => buildAbstractRow(col, 0, 0));
 	}
 
-	const header = `extractions[${extractionCount}]{${fieldList.join(',')}}:`;
-	const toonExample = header + '\n' + sampleRows.join('\n');
+	const exampleCount = sampleRows.length;
+	const header = `extractions[${exampleCount}]{${fieldList.join(',')}}:`;
 
-	let format = `Return ONLY valid TOON (NOT JSON). CRITICAL: Use the EXACT column_id and column_name values from the FIELDS section above.
+	return `--- OUTPUT FORMAT ---
 
-TOON Example with ${extractionCount} extraction(s):
+FORMAT EXAMPLE (structure only - replace placeholders with actual extracted data):
 \`\`\`
-${toonExample}
+${header}
+${sampleRows.join('\n')}
 \`\`\`
 
-Important TOON rules:
-- The [${extractionCount}] declares the array length - adjust based on actual extraction count
-- Each indented line is one extraction (2 spaces indent, TAB-separated values)
-- Values are in field order as declared in the header
-- Use TAB character between values (numbers like 97.502,48 are safe with tabs)
-- Use null for missing values`;
-
-	if (featureFlags.multiRowExtraction) {
-		format += `
-- row_index groups fields belonging to the same item (0 for first item, 1 for second, etc.)`;
-	}
-
-	return format;
+Replace:
+- <extracted_value> with actual data from images (or null if not present)
+- <coord> with coordinates 0-1000 (or 0 if not present)
+- <conf> with confidence 0.0-1.0
+- [${exampleCount}] with your actual extraction count`;
 }
 
-function generateImportantNotes(featureFlags: ExtractionFeatureFlags, isToon: boolean = false): string {
-	let notes = '\n\nImportant:';
+function generateJsonFormatSection(
+	columns: ColumnDefinition[],
+	featureFlags: ExtractionFeatureFlags,
+	bboxOrder: string
+): string {
+	const buildAbstractExample = (col: ColumnDefinition, rowIdx: number, imgIdx: number, isLast: boolean): string => {
+		let example = '    {\n';
 
-	if (featureFlags.boundingBoxes) {
-		if (isToon) {
-			notes += '\n- If a field\'s information is NOT present, set all coordinate fields to 0';
-		} else {
-			notes += '\n- If a field\'s information is NOT present, set bbox_2d to [0, 0, 0, 0]';
+		if (featureFlags.multiRowExtraction) {
+			example += `      "row_index": ${rowIdx},\n`;
 		}
-	}
 
-	if (featureFlags.confidenceScores) {
-		notes += '\n- If a field\'s information is NOT present, set confidence to 0.0';
-	}
+		example += `      "column_id": "${col.id}",\n`;
+		example += `      "column_name": "${col.name}",\n`;
+		example += '      "value": "<extracted_value>",\n';
+		example += `      "image_index": ${imgIdx}`;
 
-	notes += '\n- If a field\'s value is not visible, set value to null';
+		if (featureFlags.boundingBoxes) {
+			example += `,\n      "bbox_2d": ${bboxOrder.replace(/[a-z_]+/g, '<coord>')}`;
+		}
 
-	if (isToon) {
-		notes += '\n- Do not include any explanations, notes, or text outside the TOON structure';
+		if (featureFlags.confidenceScores) {
+			example += ',\n      "confidence": <conf>';
+		}
+
+		example += '\n    }' + (isLast ? '' : ',');
+		return example;
+	};
+
+	let examples: string[];
+	if (featureFlags.multiRowExtraction && columns.length >= 2) {
+		const cols = columns.slice(0, 2);
+		examples = [
+			buildAbstractExample(cols[0], 0, 0, false),
+			buildAbstractExample(cols[1], 0, 0, false),
+			buildAbstractExample(cols[0], 1, 0, false),
+			buildAbstractExample(cols[1], 1, 0, true)
+		];
 	} else {
-		notes += '\n- Do not include any explanations, notes, or text outside the JSON structure';
+		examples = columns.map((col, idx) =>
+			buildAbstractExample(col, 0, 0, idx === columns.length - 1)
+		);
 	}
 
-	return notes;
+	return `--- OUTPUT FORMAT ---
+
+FORMAT EXAMPLE (structure only - replace placeholders with actual extracted data):
+{
+  "extractions": [
+${examples.join('\n')}
+  ]
 }
+
+Replace:
+- <extracted_value> with actual data from images (or null if not present)
+- <coord> with coordinates 0-1000 (or 0 if not present)
+- <conf> with confidence 0.0-1.0`;
+}
+
+// =============================================================================
+// MAIN PROMPT BUILDERS
+// =============================================================================
 
 /**
  * Build a complete prompt based on feature flags and columns
@@ -326,47 +377,45 @@ function generateImportantNotes(featureFlags: ExtractionFeatureFlags, isToon: bo
 export function buildModularPrompt(config: PromptBuilderConfig): string {
 	const { columns, featureFlags, bboxOrder = '[x1, y1, x2, y2]' } = config;
 
-	let prompt = CORE_INSTRUCTIONS;
+	const sections: string[] = [];
 
-	// Conditionally add feature-specific instructions
+	// 1. Core context
+	sections.push(CORE_CONTEXT);
+
+	// 2. User schema (absolute priority)
+	sections.push(generateUserSchemaSection(columns));
+
+	// 3. Rules - always included
+	sections.push(RULES_ALWAYS);
+
+	// 4. Feature-specific rules
+	if (featureFlags.multiRowExtraction) {
+		sections.push(RULES_MULTI_ROW);
+	}
+
+	if (featureFlags.toonOutput) {
+		sections.push(RULES_TOON_OUTPUT);
+	} else {
+		sections.push(RULES_JSON_OUTPUT);
+	}
+
 	if (featureFlags.boundingBoxes) {
-		if (featureFlags.toonOutput) {
-			// TOON uses flattened coordinate fields
-			const coordFields = parseBboxOrderToFields(bboxOrder);
-			prompt += BBOX_INSTRUCTIONS_TOON(coordFields);
-		} else {
-			// JSON uses bbox_2d array
-			prompt += BBOX_INSTRUCTIONS_JSON(bboxOrder);
-		}
+		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
 	}
 
 	if (featureFlags.confidenceScores) {
-		prompt += CONFIDENCE_INSTRUCTIONS;
+		sections.push(RULES_CONFIDENCE);
 	}
 
-	if (featureFlags.multiRowExtraction) {
-		prompt += MULTI_ROW_INSTRUCTIONS;
-	}
+	sections.push(RULES_IMAGE_INDEX);
 
-	// Always include image_index instructions since it's in the output format
-	prompt += IMAGE_INDEX_INSTRUCTIONS;
+	// 5. OCR guidance (always included - harmless if OCR is disabled)
+	sections.push(RULES_OCR_GUIDANCE);
 
-	if (featureFlags.toonOutput) {
-		prompt += TOON_INSTRUCTIONS;
-	}
+	// 6. Output format example
+	sections.push(generateOutputFormatSection(columns, featureFlags, bboxOrder));
 
-	// Add fields section
-	prompt += '\n\n--- FIELDS TO EXTRACT ---\n\n';
-	prompt += generateFieldsSection(columns);
-
-	// Add expected output format
-	prompt += '\n\n--- EXPECTED OUTPUT FORMAT ---\n\n';
-	prompt += generateOutputFormatSection(columns, featureFlags, bboxOrder);
-
-	// Add final important notes
-	prompt += generateImportantNotes(featureFlags, featureFlags.toonOutput);
-
-	return prompt;
+	return sections.join('\n\n');
 }
 
 /**
@@ -375,99 +424,62 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 export interface PerPagePromptConfig extends PromptBuilderConfig {
 	currentPage: number;
 	totalPages: number;
-	previousExtractions?: string; // TOON-formatted data from prior pages
+	previousExtractions?: string;
 }
 
 /**
  * Build a prompt for per-page extraction mode
- * Each page is processed separately with context from previous pages
  */
 export function buildPerPagePrompt(config: PerPagePromptConfig): string {
 	const { columns, featureFlags, bboxOrder = '[x1, y1, x2, y2]', currentPage, totalPages, previousExtractions } = config;
 
-	// Start with page context
-	let prompt = `PAGE CONTEXT:
-You are extracting data from page ${currentPage} of ${totalPages}.
-`;
+	const sections: string[] = [];
 
-	// Add previously extracted data if available
+	// 1. Core context
+	sections.push(CORE_CONTEXT);
+
+	// 2. Per-page specific rules
+	sections.push(RULES_PER_PAGE(currentPage, totalPages));
+
+	// 3. Previous extractions context
 	if (currentPage > 1 && previousExtractions) {
-		prompt += `
-PREVIOUSLY EXTRACTED DATA (pages 1-${currentPage - 1}):
+		sections.push(`PREVIOUSLY EXTRACTED (pages 1-${currentPage - 1}):
 \`\`\`
 ${previousExtractions}
 \`\`\`
-
-Use this context to understand the document structure and maintain consistency.
-Do NOT re-extract any items already captured above.
-`;
-	} else if (currentPage === 1) {
-		prompt += `
-This is the first page. No previous extractions yet.
-`;
+DO NOT re-extract these items.`);
 	}
 
-	// Add task instructions
-	prompt += `
-YOUR TASK:
-Extract ALL items from THIS PAGE ONLY (page ${currentPage}).
-- Extract EVERY item visible on this page - do not skip any
-- Use row_index starting from 0 (will be adjusted after extraction)
-- Use image_index: 0 for all extractions (will be adjusted to page ${currentPage - 1} after)
-- Do NOT re-extract items from previous pages
-- If an item spans multiple pages, only extract the portion visible on THIS page
+	// 4. User schema (absolute priority)
+	sections.push(generateUserSchemaSection(columns));
 
-IMPORTANT: If this page contains NO extractable items (e.g., cover page, terms & conditions, blank page, or just headers/footers), return an EMPTY extraction with count 0. Do NOT hallucinate or invent data.
+	// 5. Rules - always included
+	sections.push(RULES_ALWAYS);
 
-`;
+	// 6. Feature-specific rules (multi-row always enabled in per-page mode)
+	sections.push(RULES_MULTI_ROW);
 
-	// Add standard extraction instructions
-	prompt += CORE_INSTRUCTIONS;
+	if (featureFlags.toonOutput) {
+		sections.push(RULES_TOON_OUTPUT);
+	} else {
+		sections.push(RULES_JSON_OUTPUT);
+	}
 
-	// Add feature-specific instructions
 	if (featureFlags.boundingBoxes) {
-		if (featureFlags.toonOutput) {
-			const coordFields = parseBboxOrderToFields(bboxOrder);
-			prompt += BBOX_INSTRUCTIONS_TOON(coordFields);
-		} else {
-			prompt += BBOX_INSTRUCTIONS_JSON(bboxOrder);
-		}
+		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
 	}
 
 	if (featureFlags.confidenceScores) {
-		prompt += CONFIDENCE_INSTRUCTIONS;
+		sections.push(RULES_CONFIDENCE);
 	}
 
-	// Per-page mode always uses multi-row extraction
-	prompt += `
+	// 7. OCR guidance (always included - harmless if OCR is disabled)
+	sections.push(RULES_OCR_GUIDANCE);
 
-MULTI-ROW EXTRACTION:
-- Each distinct item on this page should be extracted as a SEPARATE ROW
-- Add a "row_index" field (starting from 0) to group fields belonging to the same item
-- Extract ALL items visible on this page - INCOMPLETE EXTRACTION IS UNACCEPTABLE`;
+	// 8. Output format example
+	sections.push(generateOutputFormatSection(columns, featureFlags, bboxOrder));
 
-	// Simplified image index for single page
-	prompt += `
-
-IMAGE INDEX:
-- Use image_index: 0 for all extractions on this page (will be adjusted automatically)`;
-
-	if (featureFlags.toonOutput) {
-		prompt += TOON_INSTRUCTIONS;
-	}
-
-	// Add fields section
-	prompt += '\n\n--- FIELDS TO EXTRACT ---\n\n';
-	prompt += generateFieldsSection(columns);
-
-	// Add expected output format
-	prompt += '\n\n--- EXPECTED OUTPUT FORMAT ---\n\n';
-	prompt += generateOutputFormatSection(columns, featureFlags, bboxOrder);
-
-	// Add final important notes
-	prompt += generateImportantNotes(featureFlags, featureFlags.toonOutput);
-
-	return prompt;
+	return sections.join('\n\n');
 }
 
 /**
@@ -523,6 +535,10 @@ export function formatExtractionsAsToon(
 	const header = `extractions[${extractions.length}]{${fieldList.join(',')}}:`;
 	return header + '\n' + rows.join('\n');
 }
+
+// =============================================================================
+// PRESETS
+// =============================================================================
 
 export const PROMPT_PRESETS: Record<string, PromptPreset> = {
 	qwen3vl: {
