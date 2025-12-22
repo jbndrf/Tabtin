@@ -15,9 +15,30 @@ import https from 'https';
 import http from 'http';
 import { URL } from 'url';
 
+/** Per-request metric data for tracking individual LLM calls within a batch */
+interface RequestDetailData {
+	requestIndex: number;
+	imageStart: number;
+	imageEnd: number;
+	inputTokens: number;
+	outputTokens: number;
+	durationMs: number;
+}
+
+/** Represents a single image or PDF being converted before batch LLM processing */
+interface ProcessableItem {
+	originalIndex: number;
+	image: any;
+	pages: Array<{ dataUrl: string; extractedText: string | null }>;
+}
+
 export class QueueWorker {
 	private queueManager: QueueManager;
-	private connectionPool: ConnectionPool;
+	private projectPools: Map<string, ConnectionPool> = new Map();
+	private projectActiveJobs: Map<string, number> = new Map(); // Track active jobs per project
+	private projectMaxConcurrency: Map<string, number> = new Map(); // Cache max concurrency per project
+	private projectSettingsLastFetch: Map<string, number> = new Map(); // Track when settings were last fetched
+	private readonly SETTINGS_CACHE_TTL = 10000; // Refresh settings every 10 seconds
 	private pb: PocketBase;
 	private isRunning = false;
 	private processingLoop: NodeJS.Timeout | null = null;
@@ -29,12 +50,30 @@ export class QueueWorker {
 		adminPassword: string
 	) {
 		this.queueManager = new QueueManager(pocketbaseUrl, adminEmail, adminPassword);
-		this.connectionPool = new ConnectionPool(
-			config.maxConcurrency,
-			config.requestsPerMinute
-		);
 		this.pb = new PocketBase(pocketbaseUrl);
 		this.authenticate(adminEmail, adminPassword);
+	}
+
+	/**
+	 * Get or create a ConnectionPool for a specific project
+	 * Each project has its own pool with its own rate limiting settings
+	 */
+	private getProjectPool(projectId: string, settings: any): ConnectionPool {
+		const maxConcurrency = settings.enableParallelRequests
+			? (settings.maxConcurrency || 3)
+			: 1;
+		const requestsPerMinute = settings.requestsPerMinute || 30;
+
+		if (!this.projectPools.has(projectId)) {
+			console.log(`[Pool] Creating new pool for project ${projectId}: maxConcurrency=${maxConcurrency}, rpm=${requestsPerMinute}`);
+			this.projectPools.set(projectId, new ConnectionPool(maxConcurrency, requestsPerMinute));
+		} else {
+			// Update config in case settings changed
+			const pool = this.projectPools.get(projectId)!;
+			pool.updateConfig(maxConcurrency, requestsPerMinute);
+		}
+
+		return this.projectPools.get(projectId)!;
 	}
 
 	private async authenticate(email: string, password: string): Promise<void> {
@@ -122,7 +161,61 @@ export class QueueWorker {
 				const job = await this.queueManager.getNextJob();
 
 				if (job) {
-					await this.processJob(job);
+					const projectId = (job.data as any)?.projectId;
+
+					if (projectId) {
+						// Check if this project has capacity
+						const activeForProject = this.projectActiveJobs.get(projectId) || 0;
+						let maxForProject: number;
+
+						// Check if we need to refresh settings (cache expired or not set)
+						const lastFetch = this.projectSettingsLastFetch.get(projectId) || 0;
+						const now = Date.now();
+						const needsRefresh = now - lastFetch > this.SETTINGS_CACHE_TTL;
+
+						if (needsRefresh || this.projectMaxConcurrency.get(projectId) === undefined) {
+							try {
+								const project = await this.pb.collection('projects').getOne(projectId);
+								const settings = project.settings || {};
+								maxForProject = settings.enableParallelRequests ? (settings.maxConcurrency || 3) : 1;
+								this.projectMaxConcurrency.set(projectId, maxForProject);
+								this.projectSettingsLastFetch.set(projectId, now);
+							} catch (err) {
+								console.error(`[Queue] Failed to load project settings for ${projectId}:`, err);
+								// Fall back to cached value or default
+								maxForProject = this.projectMaxConcurrency.get(projectId) ?? 1;
+							}
+						} else {
+							maxForProject = this.projectMaxConcurrency.get(projectId)!;
+						}
+
+						if (activeForProject >= maxForProject) {
+							// Project at capacity, put job back and wait
+							console.log(`[Queue] Project ${projectId} at capacity (${activeForProject}/${maxForProject}), waiting...`);
+							await this.queueManager.requeueJob(job.id);
+							await this.sleep(500);
+							continue;
+						}
+
+						// Increment active count for this project
+						this.projectActiveJobs.set(projectId, activeForProject + 1);
+						console.log(`[Queue] Starting job ${job.id} for project ${projectId} (active: ${activeForProject + 1}/${maxForProject})`);
+
+						// Don't await - let it run concurrently
+						this.processJob(job)
+							.finally(() => {
+								const current = this.projectActiveJobs.get(projectId) || 1;
+								this.projectActiveJobs.set(projectId, Math.max(0, current - 1));
+								console.log(`[Queue] Job ${job.id} finished for project ${projectId} (active: ${current - 1}/${maxForProject})`);
+							});
+
+						// Small delay to avoid hammering the queue
+						await this.sleep(50);
+					} else {
+						// No projectId, just process it
+						this.processJob(job);
+						await this.sleep(100);
+					}
 				} else {
 					// No jobs available, wait before checking again
 					await this.sleep(2000);
@@ -182,78 +275,65 @@ export class QueueWorker {
 				sort: '+order'
 			});
 
-			// Convert images to base64 and collect extracted text
-			// Handle PDFs by converting them to images first
-			const imageData: Array<{ dataUrl: string; extractedText: string | null }> = [];
-
 			// Build PDF conversion options from project settings
 			const pdfOptions: PdfConversionOptions = {
-				scale: (settings.pdfDpi ?? 600) / 72, // Convert DPI to scale factor
+				scale: (settings.pdfDpi ?? 600) / 72,
 				maxWidth: settings.pdfMaxWidth ?? 7100,
 				maxHeight: settings.pdfMaxHeight ?? 7100,
 				format: settings.pdfFormat ?? 'png',
-				quality: (settings.pdfQuality ?? 100) / 100 // Convert percentage to 0-1 range
+				quality: (settings.pdfQuality ?? 100) / 100
 			};
 
-			for (const img of images) {
-				const url = this.pb.files.getURL(img, img.image);
-				const response = await fetch(url);
-				const blob = await response.blob();
-
-				// Check if this is a PDF file
-				if (isPdfFile(img.image)) {
-					console.log(`Converting PDF to images: ${img.image} (DPI: ${settings.pdfDpi ?? 600}, Format: ${pdfOptions.format})`);
-
-					// Convert blob to buffer
-					const arrayBuffer = await blob.arrayBuffer();
-					const buffer = Buffer.from(arrayBuffer);
-
-					// Convert PDF to images
-					const convertedPages = await convertPdfToImages(buffer, img.image, pdfOptions);
-
-					// Add each page as a separate image
-					for (const page of convertedPages) {
-						const pageDataUrl = `data:${page.mimeType};base64,${page.buffer.toString('base64')}`;
-						imageData.push({
-							dataUrl: pageDataUrl,
-							extractedText: page.extractedText || null
-						});
-					}
-
-					console.log(`Converted PDF ${img.image} to ${convertedPages.length} images`);
-				} else {
-					// Regular image - just convert to base64
-					const dataUrl = await this.blobToBase64DataUrl(blob);
-					imageData.push({
-						dataUrl,
-						extractedText: img.extracted_text || null
-					});
-				}
-			}
-
-			// Extract feature flags from settings
+			// Extract feature flags and settings
 			const featureFlags = withFeatureFlagDefaults(settings.featureFlags);
-
-			// Generate prompt using modular builder
 			const bboxOrder = getBboxOrder(settings.coordinateFormat);
 			const includeOcrText = settings.includeOcrText ?? true;
+			const maxConcurrency = settings.enableParallelRequests ? (settings.maxConcurrency || 3) : 1;
 
+			// Create ProcessableItem array for parallel conversion
+			const items: ProcessableItem[] = images.map((img, index) => ({
+				originalIndex: index,
+				image: img,
+				pages: []
+			}));
+
+			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency})`);
+
+			// 1. CONVERT ALL IMAGES/PDFs (can parallelize conversion)
+			await this.executeWithConcurrencyLimit(
+				items,
+				async (item) => this.convertSingleItem(item, pdfOptions),
+				maxConcurrency
+			);
+
+			// 2. COLLECT ALL PAGES INTO SINGLE ARRAY (in original order)
+			const allPages: Array<{ dataUrl: string; extractedText: string | null }> = [];
+			for (const item of items.sort((a, b) => a.originalIndex - b.originalIndex)) {
+				allPages.push(...item.pages);
+			}
+
+			console.log(`[Batch] Converted to ${allPages.length} total pages`);
+
+			// 3. PROCESS WITH LLM (single call or per-page depending on settings)
 			let parsedData: any[];
 			let extractedRows: any[][];
 			let totalTokensUsed = 0;
+			let totalInputTokens = 0;
+			let totalOutputTokens = 0;
+			const requestDetails: RequestDetailData[] = [];
 
 			// Check if per-page extraction is enabled and we have multiple pages
-			if (featureFlags.perPageExtraction && imageData.length > 1) {
+			if (featureFlags.perPageExtraction && allPages.length > 1) {
 				// Per-page extraction mode: process each page separately with context
-				console.log(`[Per-Page Mode] Processing ${imageData.length} pages sequentially`);
+				console.log(`[Per-Page Mode] Processing ${allPages.length} pages sequentially`);
 
 				let allExtractions: any[] = [];
 				let currentRowIndexOffset = 0;
 
-				for (let pageIdx = 0; pageIdx < imageData.length; pageIdx++) {
-					const pageImage = imageData[pageIdx];
+				for (let pageIdx = 0; pageIdx < allPages.length; pageIdx++) {
+					const pageImage = allPages[pageIdx];
 					const currentPage = pageIdx + 1;
-					const totalPages = imageData.length;
+					const totalPages = allPages.length;
 
 					console.log(`[Per-Page Mode] Processing page ${currentPage}/${totalPages}`);
 
@@ -287,8 +367,24 @@ export class QueueWorker {
 					}
 
 					// Call LLM for this page
-					const pageResult = await this.callLlmApi(pageContent, settings);
-					totalTokensUsed += pageResult.usage?.total_tokens || 0;
+					const llmStartTime = Date.now();
+					const pageResult = await this.callLlmApi(pageContent, settings, projectId);
+					const llmEndTime = Date.now();
+
+					const inputTokens = pageResult.usage?.prompt_tokens || 0;
+					const outputTokens = pageResult.usage?.completion_tokens || 0;
+					totalInputTokens += inputTokens;
+					totalOutputTokens += outputTokens;
+					totalTokensUsed += inputTokens + outputTokens;
+
+					requestDetails.push({
+						requestIndex: pageIdx,
+						imageStart: pageIdx,
+						imageEnd: pageIdx,
+						inputTokens,
+						outputTokens,
+						durationMs: llmEndTime - llmStartTime
+					});
 
 					// Parse response
 					const pageRawContent = pageResult.choices[0].message.content;
@@ -302,7 +398,6 @@ export class QueueWorker {
 					console.log(`[Per-Page Mode] Page ${currentPage} returned ${pageExtractions.length} extractions`);
 
 					// Adjust row_index and image_index for this page's extractions
-					// Find the max row_index in this page's extractions
 					let maxPageRowIndex = -1;
 					const adjustedExtractions = pageExtractions.map((e: any) => {
 						const adjustedRowIndex = (e.row_index ?? 0) + currentRowIndexOffset;
@@ -312,13 +407,13 @@ export class QueueWorker {
 						return {
 							...e,
 							row_index: adjustedRowIndex,
-							image_index: pageIdx // Set to actual page index
+							image_index: pageIdx
 						};
 					});
 
 					allExtractions.push(...adjustedExtractions);
 
-					// Update offset for next page (based on max row_index seen + 1)
+					// Update offset for next page
 					if (maxPageRowIndex >= 0) {
 						currentRowIndexOffset += maxPageRowIndex + 1;
 					}
@@ -332,64 +427,80 @@ export class QueueWorker {
 				console.log(`[Per-Page Mode] Grouped into ${extractedRows.length} rows`);
 
 			} else {
-				// Standard all-at-once extraction
+				// Standard all-at-once extraction: ALL pages in ONE LLM call
 				const prompt = this.generatePrompt(settings.columns, featureFlags, bboxOrder);
-
-				// Build content array with images and extracted text
 				const contentArray: any[] = [{ type: 'text', text: prompt }];
 
-				imageData.forEach((img, index) => {
-					// Add the image
+				allPages.forEach((page, index) => {
 					contentArray.push({
 						type: 'image_url',
-						image_url: { url: img.dataUrl }
+						image_url: { url: page.dataUrl }
 					});
 
-					// Add extracted text if available and setting is enabled
-					if (includeOcrText && img.extractedText && img.extractedText.trim()) {
+					if (includeOcrText && page.extractedText?.trim()) {
 						contentArray.push({
 							type: 'text',
-							text: `[OCR reference - page ${index + 1}]: ${img.extractedText}`
+							text: `[OCR reference - page ${index + 1}]: ${page.extractedText}`
 						});
 					}
 				});
 
-				// Add page-count reminder for multi-page documents
-				if (imageData.length > 1) {
+				// Add reminder for multi-page documents
+				if (allPages.length > 1) {
 					contentArray.push({
 						type: 'text',
-						text: `REMINDER: You have been given ${imageData.length} pages. Extract ALL matching items from ALL ${imageData.length} pages. Do not stop early.`
+						text: `REMINDER: You have been given ${allPages.length} pages. Extract ALL matching items from ALL ${allPages.length} pages. Do not stop early.`
 					});
 				}
 
-				// Call LLM API using unified method
-				const result = await this.callLlmApi(contentArray, settings);
-				totalTokensUsed = result.usage?.total_tokens || 0;
+				// Single LLM call with all pages
+				const llmStartTime = Date.now();
+				const result = await this.callLlmApi(contentArray, settings, projectId);
+				const llmEndTime = Date.now();
 
-				// Parse and transform LLM response using unified method
+				const inputTokens = result.usage?.prompt_tokens || 0;
+				const outputTokens = result.usage?.completion_tokens || 0;
+				totalInputTokens = inputTokens;
+				totalOutputTokens = outputTokens;
+				totalTokensUsed = inputTokens + outputTokens;
+
+				requestDetails.push({
+					requestIndex: 0,
+					imageStart: 0,
+					imageEnd: allPages.length - 1,
+					inputTokens,
+					outputTokens,
+					durationMs: llmEndTime - llmStartTime
+				});
+
+				// Parse and transform LLM response
 				const rawContent = result.choices[0].message.content;
-				parsedData = this.parseAndTransformLLMResponse(rawContent, settings.columns, featureFlags, settings.coordinateFormat);
+				parsedData = this.parseAndTransformLLMResponse(
+					rawContent,
+					settings.columns,
+					featureFlags,
+					settings.coordinateFormat
+				);
 
-				// Always use multi-row parsing (single-row is just multi-row with one item)
+				// Group into rows
 				extractedRows = this.parseMultiRowResponse(parsedData, settings.columns, featureFlags);
-				console.log(`Parsed ${extractedRows.length} rows from LLM response`);
+				console.log(`[Batch] Parsed ${extractedRows.length} rows from LLM response`);
 			}
 
-			// Create extraction_rows records using batch API for better performance
-			// NOTE: PocketBase treats 0 as blank for required numeric fields, so we use 1-based indexing
-			const batch = this.pb.createBatch();
+			// 4. CREATE EXTRACTION ROWS
+			const pbBatch = this.pb.createBatch();
 			for (let rowIndex = 0; rowIndex < extractedRows.length; rowIndex++) {
-				batch.collection('extraction_rows').create({
+				pbBatch.collection('extraction_rows').create({
 					batch: batchId,
 					project: projectId,
-					row_index: rowIndex + 1, // 1-based indexing (PocketBase treats 0 as blank)
+					row_index: rowIndex + 1,
 					row_data: extractedRows[rowIndex],
 					status: BatchStatus.REVIEW
 				});
 			}
 
 			try {
-				await batch.send();
+				await pbBatch.send();
 				console.log(`Created ${extractedRows.length} extraction_rows using batch API`);
 			} catch (err: any) {
 				console.error('Failed to create extraction_rows:', err);
@@ -397,10 +508,10 @@ export class QueueWorker {
 				throw err;
 			}
 
-			// Update batch with metadata (keep processed_data for backward compatibility during transition)
+			// Update batch with metadata
 			await this.pb.collection('image_batches').update(batchId, {
 				status: BatchStatus.REVIEW,
-				processed_data: { extractions: parsedData }, // Keep for backward compatibility
+				processed_data: { extractions: parsedData },
 				row_count: extractedRows.length,
 				processing_completed: new Date().toISOString()
 			});
@@ -416,7 +527,10 @@ export class QueueWorker {
 				imageCount: images.length,
 				extractionCount: parsedData.length,
 				modelUsed: settings.modelName,
-				tokensUsed: totalTokensUsed || null
+				tokensUsed: totalTokensUsed || null,
+				inputTokens: totalInputTokens || null,
+				outputTokens: totalOutputTokens || null,
+				requestDetails: requestDetails.length > 0 ? requestDetails : undefined
 			});
 		} catch (error: any) {
 			// Mark batch as failed
@@ -548,7 +662,7 @@ export class QueueWorker {
 			];
 
 			// Call LLM API using unified method
-			const result = await this.callLlmApi(redoContent, settings);
+			const result = await this.callLlmApi(redoContent, settings, projectId);
 
 			// Parse and transform LLM response using unified method
 			const rawContent = result.choices[0].message.content;
@@ -608,6 +722,8 @@ export class QueueWorker {
 			console.log(`Updated extraction_row ${existingRow.id} with ${mergedExtractions.length} total extractions`);
 
 			// Record success metrics
+			const inputTokens = result.usage?.prompt_tokens || 0;
+			const outputTokens = result.usage?.completion_tokens || 0;
 			await this.recordMetrics({
 				batchId,
 				projectId,
@@ -618,7 +734,17 @@ export class QueueWorker {
 				imageCount: croppedImages.length,
 				extractionCount: redoExtractions.length,
 				modelUsed: settings.modelName,
-				tokensUsed: result.usage?.total_tokens || null
+				tokensUsed: inputTokens + outputTokens || null,
+				inputTokens: inputTokens || null,
+				outputTokens: outputTokens || null,
+				requestDetails: [{
+					requestIndex: 0,
+					imageStart: 0,
+					imageEnd: croppedImages.length - 1,
+					inputTokens,
+					outputTokens,
+					durationMs: Date.now() - startTime
+				}]
 			});
 		} catch (error: any) {
 			// Record failure metrics
@@ -975,7 +1101,8 @@ export class QueueWorker {
 	 */
 	private async callLlmApi(
 		content: Array<{ type: string; [key: string]: any }>,
-		settings: { endpoint: string; apiKey: string; modelName: string; requestTimeout?: number }
+		settings: { endpoint: string; apiKey: string; modelName: string; requestTimeout?: number; enableParallelRequests?: boolean; maxConcurrency?: number; requestsPerMinute?: number; enableDeterministicMode?: boolean; temperature?: number; topK?: number; topP?: number; repetitionPenalty?: number; frequencyPenalty?: number; presencePenalty?: number },
+		projectId: string
 	): Promise<any> {
 		// 0 means unlimited (24 hours max), undefined defaults to 10 minutes
 		const requestTimeoutMinutes = settings.requestTimeout ?? 10;
@@ -983,7 +1110,10 @@ export class QueueWorker {
 			? 24 * 60 * 60 * 1000  // 24 hours (effectively unlimited)
 			: requestTimeoutMinutes * 60 * 1000;
 
-		return this.connectionPool.execute(async () => {
+		// Get the project-specific connection pool
+		const pool = this.getProjectPool(projectId, settings);
+
+		return pool.execute(async () => {
 			return new Promise((resolve, reject) => {
 				const url = new URL(settings.endpoint);
 				const isHttps = url.protocol === 'https:';
@@ -991,7 +1121,15 @@ export class QueueWorker {
 
 				const body = JSON.stringify({
 					model: settings.modelName,
-					messages: [{ role: 'user', content }]
+					messages: [{ role: 'user', content }],
+					...(settings.enableDeterministicMode && {
+						temperature: settings.temperature ?? 0.0,
+						top_k: settings.topK ?? 1,
+						top_p: settings.topP ?? 1.0,
+						repetition_penalty: settings.repetitionPenalty ?? 1.0,
+						frequency_penalty: settings.frequencyPenalty ?? 0.0,
+						presence_penalty: settings.presencePenalty ?? 0.0
+					})
 				});
 
 				const options: https.RequestOptions = {
@@ -1052,6 +1190,9 @@ export class QueueWorker {
 		extractionCount?: number;
 		modelUsed?: string;
 		tokensUsed?: number | null;
+		inputTokens?: number | null;
+		outputTokens?: number | null;
+		requestDetails?: RequestDetailData[];
 		errorMessage?: string;
 	}): Promise<void> {
 		try {
@@ -1067,6 +1208,9 @@ export class QueueWorker {
 				...(data.extractionCount !== undefined && { extractionCount: data.extractionCount }),
 				...(data.modelUsed && { modelUsed: String(data.modelUsed) }),
 				...(data.tokensUsed !== undefined && { tokensUsed: data.tokensUsed }),
+				...(data.inputTokens !== undefined && { inputTokens: data.inputTokens }),
+				...(data.outputTokens !== undefined && { outputTokens: data.outputTokens }),
+				...(data.requestDetails && data.requestDetails.length > 0 && { requestDetails: data.requestDetails }),
 				...(data.errorMessage && { errorMessage: String(data.errorMessage) })
 			});
 		} catch (err: any) {
@@ -1075,19 +1219,35 @@ export class QueueWorker {
 		}
 	}
 
-	updateConfig(config: Partial<WorkerConfig>): void {
-		if (config.maxConcurrency !== undefined || config.requestsPerMinute !== undefined) {
-			this.connectionPool.updateConfig(
-				config.maxConcurrency ?? this.config.maxConcurrency,
-				config.requestsPerMinute ?? this.config.requestsPerMinute
-			);
+	getStats() {
+		// Return aggregated stats from all project pools
+		const projectStats: Record<string, any> = {};
+		let totalActiveJobs = 0;
+		let totalActiveRequests = 0;
+		let totalQueuedRequests = 0;
+
+		for (const [projectId, pool] of this.projectPools) {
+			const poolStats = pool.getStats();
+			const activeJobs = this.projectActiveJobs.get(projectId) || 0;
+			const maxConcurrency = this.projectMaxConcurrency.get(projectId) || 1;
+			totalActiveJobs += activeJobs;
+			totalActiveRequests += poolStats.activeRequests;
+			totalQueuedRequests += poolStats.queuedRequests;
+
+			projectStats[projectId] = {
+				...poolStats,
+				activeJobs,
+				maxConcurrency
+			};
 		}
 
-		this.config = { ...this.config, ...config };
-	}
-
-	getStats() {
-		return this.connectionPool.getStats();
+		return {
+			totalActiveJobs,
+			poolCount: this.projectPools.size,
+			totalActiveRequests,
+			totalQueuedRequests,
+			projectPools: projectStats
+		};
 	}
 
 	/**
@@ -1335,5 +1495,79 @@ export class QueueWorker {
 		const result = fixedLines.join('\n');
 		console.log('=== End Fixing TOON Array Counts ===');
 		return result;
+	}
+
+	/**
+	 * Convert a single image or PDF to base64 data URLs
+	 * Populates item.pages with converted images
+	 */
+	private async convertSingleItem(
+		item: ProcessableItem,
+		pdfOptions: PdfConversionOptions
+	): Promise<void> {
+		const url = this.pb.files.getURL(item.image, item.image.image);
+		const response = await fetch(url);
+		const blob = await response.blob();
+
+		if (isPdfFile(item.image.image)) {
+			console.log(`[Pipeline] Converting PDF: ${item.image.image}`);
+			const arrayBuffer = await blob.arrayBuffer();
+			const buffer = Buffer.from(arrayBuffer);
+			const convertedPages = await convertPdfToImages(buffer, item.image.image, pdfOptions);
+
+			for (const page of convertedPages) {
+				const pageDataUrl = `data:${page.mimeType};base64,${page.buffer.toString('base64')}`;
+				item.pages.push({
+					dataUrl: pageDataUrl,
+					extractedText: page.extractedText || null
+				});
+			}
+			console.log(`[Pipeline] PDF ${item.image.image} converted to ${convertedPages.length} pages`);
+		} else {
+			const dataUrl = await this.blobToBase64DataUrl(blob);
+			item.pages.push({
+				dataUrl,
+				extractedText: item.image.extracted_text || null
+			});
+		}
+	}
+
+	/**
+	 * Execute async operations with a concurrency limit (semaphore pattern)
+	 */
+	private async executeWithConcurrencyLimit<T>(
+		items: T[],
+		processor: (item: T) => Promise<void>,
+		maxConcurrency: number
+	): Promise<void> {
+		let active = 0;
+		let index = 0;
+
+		return new Promise((resolve, reject) => {
+			const errors: Error[] = [];
+
+			const next = () => {
+				while (active < maxConcurrency && index < items.length) {
+					active++;
+					const currentItem = items[index++];
+					processor(currentItem)
+						.catch((err) => errors.push(err))
+						.finally(() => {
+							active--;
+							if (index >= items.length && active === 0) {
+								resolve();
+							} else {
+								next();
+							}
+						});
+				}
+			};
+
+			if (items.length === 0) {
+				resolve();
+			} else {
+				next();
+			}
+		});
 	}
 }

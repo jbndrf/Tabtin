@@ -187,6 +187,22 @@ export class QueueManager {
 		}
 	}
 
+	async requeueJob(jobId: string): Promise<void> {
+		try {
+			const pb = await this.getPocketBase();
+			await pb.collection(QUEUE_COLLECTION).update(jobId, {
+				status: 'queued',
+				startedAt: null
+			});
+		} catch (error: any) {
+			if (error.status === 404) {
+				console.log(`Job ${jobId} was already deleted`);
+				return;
+			}
+			throw error;
+		}
+	}
+
 	async markFailed(jobId: string, error: string, retry: boolean = false): Promise<void> {
 		try {
 			const pb = await this.getPocketBase();
@@ -292,7 +308,7 @@ export class QueueManager {
 		cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
 
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
-			filter: `status = "completed" && completedAt < "${cutoffDate.toISOString()}"`
+			filter: `status = "completed" && completedAt < "${cutoffDate.toISOString().replace('T', ' ')}"`
 		});
 
 		for (const record of records) {

@@ -13,17 +13,18 @@ export const GET: RequestHandler = async ({ url }) => {
 		const pb = new PocketBase(POCKETBASE_URL);
 
 		// Calculate time filter
+		// PocketBase requires datetime format with space instead of 'T'
 		let timeFilter = '';
 		const now = new Date();
 		if (timeRange === '24h') {
 			const past24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-			timeFilter = `created >= "${past24h.toISOString()}"`;
+			timeFilter = `created >= "${past24h.toISOString().replace('T', ' ')}"`;
 		} else if (timeRange === '7d') {
 			const past7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-			timeFilter = `created >= "${past7d.toISOString()}"`;
+			timeFilter = `created >= "${past7d.toISOString().replace('T', ' ')}"`;
 		} else if (timeRange === '30d') {
 			const past30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-			timeFilter = `created >= "${past30d.toISOString()}"`;
+			timeFilter = `created >= "${past30d.toISOString().replace('T', ' ')}"`;
 		}
 
 		// Build filter
@@ -75,11 +76,27 @@ export const GET: RequestHandler = async ({ url }) => {
 
 			// Token usage (if available)
 			totalTokens: metrics.reduce((sum: number, m: any) => sum + (m.tokensUsed || 0), 0),
+			totalInputTokens: metrics.reduce((sum: number, m: any) => sum + (m.inputTokens || 0), 0),
+			totalOutputTokens: metrics.reduce((sum: number, m: any) => sum + (m.outputTokens || 0), 0),
 			averageTokensPerBatch:
 				metrics.filter((m: any) => m.tokensUsed).length > 0
 					? (
 							metrics.reduce((sum: number, m: any) => sum + (m.tokensUsed || 0), 0) /
 							metrics.filter((m: any) => m.tokensUsed).length
+						).toFixed(0)
+					: 0,
+			averageInputTokensPerBatch:
+				metrics.filter((m: any) => m.inputTokens).length > 0
+					? (
+							metrics.reduce((sum: number, m: any) => sum + (m.inputTokens || 0), 0) /
+							metrics.filter((m: any) => m.inputTokens).length
+						).toFixed(0)
+					: 0,
+			averageOutputTokensPerBatch:
+				metrics.filter((m: any) => m.outputTokens).length > 0
+					? (
+							metrics.reduce((sum: number, m: any) => sum + (m.outputTokens || 0), 0) /
+							metrics.filter((m: any) => m.outputTokens).length
 						).toFixed(0)
 					: 0,
 

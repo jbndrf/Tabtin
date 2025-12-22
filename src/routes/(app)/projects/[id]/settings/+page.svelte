@@ -80,6 +80,24 @@
 	// Rate limiting settings
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
+	let maxConcurrency = $state<number>(3);
+
+	// Sampling parameters (for deterministic/reproducible outputs)
+	const SAMPLING_DEFAULTS = {
+		temperature: 0.0,
+		topK: 1,
+		topP: 1.0,
+		repetitionPenalty: 1.0,
+		frequencyPenalty: 0.0,
+		presencePenalty: 0.0
+	};
+	let enableDeterministicMode = $state<boolean>(false);
+	let temperature = $state<number>(SAMPLING_DEFAULTS.temperature);
+	let topK = $state<number>(SAMPLING_DEFAULTS.topK);
+	let topP = $state<number>(SAMPLING_DEFAULTS.topP);
+	let repetitionPenalty = $state<number>(SAMPLING_DEFAULTS.repetitionPenalty);
+	let frequencyPenalty = $state<number>(SAMPLING_DEFAULTS.frequencyPenalty);
+	let presencePenalty = $state<number>(SAMPLING_DEFAULTS.presencePenalty);
 
 	// Extraction feature flags
 	let featureFlags = $state<ExtractionFeatureFlags>({ ...DEFAULT_FEATURE_FLAGS });
@@ -186,6 +204,16 @@
 			// Load rate limiting settings
 			requestsPerMinute = settings.requestsPerMinute || 15;
 			enableParallelRequests = settings.enableParallelRequests || false;
+			maxConcurrency = settings.maxConcurrency || 3;
+
+			// Load sampling parameters
+			enableDeterministicMode = settings.enableDeterministicMode || false;
+			temperature = settings.temperature ?? SAMPLING_DEFAULTS.temperature;
+			topK = settings.topK ?? SAMPLING_DEFAULTS.topK;
+			topP = settings.topP ?? SAMPLING_DEFAULTS.topP;
+			repetitionPenalty = settings.repetitionPenalty ?? SAMPLING_DEFAULTS.repetitionPenalty;
+			frequencyPenalty = settings.frequencyPenalty ?? SAMPLING_DEFAULTS.frequencyPenalty;
+			presencePenalty = settings.presencePenalty ?? SAMPLING_DEFAULTS.presencePenalty;
 
 			// Load extraction feature flags
 			featureFlags = withFeatureFlagDefaults(settings.featureFlags);
@@ -354,6 +382,7 @@
 				coordinateFormat,
 				requestsPerMinute,
 				enableParallelRequests,
+				maxConcurrency,
 				featureFlags,
 				// PDF processing settings
 				pdfDpi,
@@ -364,6 +393,14 @@
 				includeOcrText,
 				// API request settings
 				requestTimeout,
+				// Sampling parameters
+				enableDeterministicMode,
+				temperature,
+				topK,
+				topP,
+				repetitionPenalty,
+				frequencyPenalty,
+				presencePenalty,
 				columns: columns.map((col, index) => ({
 					id: String(index + 1),
 					name: col.name,
@@ -793,6 +830,95 @@
 							</Tooltip.Content>
 						</Tooltip.Root>
 					</div>
+
+					{#if enableParallelRequests}
+						<div class="ml-6 mt-3 space-y-2">
+							<div class="flex items-center gap-2">
+								<Label for="maxConcurrency">Max Concurrent Requests</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Maximum number of LLM API requests that can run simultaneously for this project.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Input
+								type="number"
+								id="maxConcurrency"
+								bind:value={maxConcurrency}
+								min="1"
+								max="20"
+								placeholder="3"
+								class="h-12 max-w-32"
+							/>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Deterministic Mode -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="flex items-center space-x-2">
+							<input
+								type="checkbox"
+								id="enableDeterministicMode"
+								bind:checked={enableDeterministicMode}
+								class="h-4 w-4 rounded border-input"
+							/>
+							<Label for="enableDeterministicMode" class="cursor-pointer">Deterministic Mode</Label>
+						</div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+										<HelpCircle class="h-4 w-4" />
+									</button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<div class="max-w-xs">
+									<p class="text-xs">Sends sampling parameters to the LLM for reproducible outputs. Required for vLLM which doesn't support server-side defaults.</p>
+								</div>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					</div>
+
+					{#if enableDeterministicMode}
+						<div class="ml-6 mt-3 grid grid-cols-2 gap-4">
+							<div class="space-y-1">
+								<Label for="temperature" class="text-sm">Temperature</Label>
+								<Input type="number" id="temperature" bind:value={temperature} min="0" max="2" step="0.1" class="h-10" />
+							</div>
+							<div class="space-y-1">
+								<Label for="topK" class="text-sm">Top K</Label>
+								<Input type="number" id="topK" bind:value={topK} min="1" max="100" step="1" class="h-10" />
+							</div>
+							<div class="space-y-1">
+								<Label for="topP" class="text-sm">Top P</Label>
+								<Input type="number" id="topP" bind:value={topP} min="0" max="1" step="0.1" class="h-10" />
+							</div>
+							<div class="space-y-1">
+								<Label for="repetitionPenalty" class="text-sm">Repetition Penalty</Label>
+								<Input type="number" id="repetitionPenalty" bind:value={repetitionPenalty} min="1" max="2" step="0.1" class="h-10" />
+							</div>
+							<div class="space-y-1">
+								<Label for="frequencyPenalty" class="text-sm">Frequency Penalty</Label>
+								<Input type="number" id="frequencyPenalty" bind:value={frequencyPenalty} min="0" max="2" step="0.1" class="h-10" />
+							</div>
+							<div class="space-y-1">
+								<Label for="presencePenalty" class="text-sm">Presence Penalty</Label>
+								<Input type="number" id="presencePenalty" bind:value={presencePenalty} min="0" max="2" step="0.1" class="h-10" />
+							</div>
+						</div>
+					{/if}
 				</div>
 
 				<div class="space-y-2">

@@ -159,26 +159,44 @@
 					<CardTitle>Worker Status</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+					<div class="grid grid-cols-4 gap-4 mb-4">
 						<div>
-							<p class="text-sm text-muted-foreground">Active Requests</p>
-							<p class="text-2xl font-bold">{workerStats.activeRequests}</p>
+							<p class="text-sm text-muted-foreground">Active Jobs</p>
+							<p class="text-2xl font-bold">{workerStats.totalActiveJobs || 0}</p>
+						</div>
+						<div>
+							<p class="text-sm text-muted-foreground">Active LLM Requests</p>
+							<p class="text-2xl font-bold">{workerStats.totalActiveRequests || 0}</p>
 						</div>
 						<div>
 							<p class="text-sm text-muted-foreground">Queued in Pool</p>
-							<p class="text-2xl font-bold">{workerStats.queuedRequests}</p>
+							<p class="text-2xl font-bold">{workerStats.totalQueuedRequests || 0}</p>
 						</div>
 						<div>
-							<p class="text-sm text-muted-foreground">Requests/Minute</p>
-							<p class="text-2xl font-bold">
-								{workerStats.requestsInLastMinute}/{workerStats.requestsPerMinute}
-							</p>
-						</div>
-						<div>
-							<p class="text-sm text-muted-foreground">Max Concurrency</p>
-							<p class="text-2xl font-bold">{workerStats.maxConcurrency}</p>
+							<p class="text-sm text-muted-foreground">Active Projects</p>
+							<p class="text-2xl font-bold">{workerStats.poolCount || 0}</p>
 						</div>
 					</div>
+
+					{#if workerStats.projectPools && Object.keys(workerStats.projectPools).length > 0}
+						<div class="border-t pt-4">
+							<p class="text-sm font-medium text-muted-foreground mb-2">Per-Project Status</p>
+							<div class="space-y-2">
+								{#each Object.entries(workerStats.projectPools) as [projectId, poolStats]}
+								{@const stats = poolStats as { activeJobs: number; maxConcurrency: number; activeRequests: number; queuedRequests: number; requestsInLastMinute: number; requestsPerMinute: number }}
+									<div class="flex items-center justify-between text-sm bg-muted/50 rounded px-3 py-2">
+										<span class="font-mono text-xs">{projectId.substring(0, 8)}...</span>
+										<div class="flex gap-4 text-xs">
+											<span class="font-medium">Jobs: {stats.activeJobs}/{stats.maxConcurrency}</span>
+											<span>LLM: {stats.activeRequests}</span>
+											<span>Queued: {stats.queuedRequests}</span>
+											<span>RPM: {stats.requestsInLastMinute}/{stats.requestsPerMinute}</span>
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				</CardContent>
 			</Card>
 		{/if}

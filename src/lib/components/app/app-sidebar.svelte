@@ -11,7 +11,8 @@
 		LogOut,
 		Settings,
 		ChevronDown,
-		Puzzle
+		Puzzle,
+		BarChart3
 	} from 'lucide-svelte';
 	import { page } from '$app/stores';
 	import { enhance } from '$app/forms';
@@ -72,6 +73,14 @@
 							<Sidebar.MenuButton isActive={isActive('/settings')}>
 								<Settings class="h-4 w-4" />
 								<span>{t('nav.settings')}</span>
+							</Sidebar.MenuButton>
+						</a>
+					</Sidebar.MenuItem>
+					<Sidebar.MenuItem>
+						<a href="/metrics" class="w-full">
+							<Sidebar.MenuButton isActive={isActive('/metrics')}>
+								<BarChart3 class="h-4 w-4" />
+								<span>Metrics</span>
 							</Sidebar.MenuButton>
 						</a>
 					</Sidebar.MenuItem>
