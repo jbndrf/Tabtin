@@ -595,7 +595,7 @@
 		<p class="text-muted-foreground">{t('images.gallery.loading')}</p>
 	</div>
 {:else if $currentProject}
-	<div class="flex h-full flex-col">
+	<div class="fixed inset-0 top-16 flex flex-col md:relative md:inset-auto md:top-auto md:h-auto">
 		<!-- Header -->
 		<div class="border-b bg-background px-4 py-3">
 			<div class="flex items-center justify-between">
@@ -731,7 +731,7 @@
 			</div>
 
 			<!-- Content -->
-			<div class="overflow-y-auto p-4 {selectionMode && selectedBatches.size > 0 ? 'pb-24' : ''}">
+			<div class="overflow-y-auto p-4 mb-16 md:mb-0 {selectionMode && selectedBatches.size > 0 ? 'pb-24' : ''}">
 				{#if filteredBatches.length === 0}
 					<!-- Empty State -->
 					<Card class="border-dashed">
@@ -830,7 +830,7 @@
 
 		<!-- Floating Action Bar -->
 		{#if selectionMode && selectedBatches.size > 0}
-			<div class="fixed bottom-0 left-0 right-0 z-50 border-t bg-background p-4 shadow-2xl backdrop-blur-sm">
+			<div class="fixed bottom-16 left-0 right-0 z-40 border-t bg-background p-4 shadow-2xl backdrop-blur-sm md:bottom-0">
 				<div class="mx-auto flex max-w-4xl gap-2">
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger>

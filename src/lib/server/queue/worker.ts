@@ -5,6 +5,7 @@ import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
 import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
+import { scaleImage } from '../image-scaler';
 import { buildModularPrompt, buildPerPagePrompt, formatExtractionsAsToon } from '$lib/prompt-presets';
 import { withFeatureFlagDefaults, createExtractionResult, type ExtractionFeatureFlags, type ExtractionResultInput } from '$lib/types/extraction';
 import { getBboxOrder } from '$lib/utils/coordinates';
@@ -297,12 +298,13 @@ export class QueueWorker {
 				pages: []
 			}));
 
-			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency})`);
+			const imageScale = settings.imageScale ?? 100;
+			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency}, imageScale=${imageScale}%)`);
 
 			// 1. CONVERT ALL IMAGES/PDFs (can parallelize conversion)
 			await this.executeWithConcurrencyLimit(
 				items,
-				async (item) => this.convertSingleItem(item, pdfOptions),
+				async (item) => this.convertSingleItem(item, pdfOptions, imageScale),
 				maxConcurrency
 			);
 
@@ -1503,7 +1505,8 @@ export class QueueWorker {
 	 */
 	private async convertSingleItem(
 		item: ProcessableItem,
-		pdfOptions: PdfConversionOptions
+		pdfOptions: PdfConversionOptions,
+		imageScale: number = 100
 	): Promise<void> {
 		const url = this.pb.files.getURL(item.image, item.image.image);
 		const response = await fetch(url);
@@ -1524,7 +1527,19 @@ export class QueueWorker {
 			}
 			console.log(`[Pipeline] PDF ${item.image.image} converted to ${convertedPages.length} pages`);
 		} else {
-			const dataUrl = await this.blobToBase64DataUrl(blob);
+			// Convert blob to buffer for processing
+			const arrayBuffer = await blob.arrayBuffer();
+			let imageBuffer: Buffer = Buffer.from(arrayBuffer);
+			let mimeType = blob.type || 'image/jpeg';
+
+			// Apply scaling if < 100%
+			if (imageScale < 100) {
+				const scaled = await scaleImage(imageBuffer, imageScale);
+				imageBuffer = Buffer.from(scaled.buffer);
+				mimeType = scaled.mimeType;
+			}
+
+			const dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
 			item.pages.push({
 				dataUrl,
 				extractedText: item.image.extracted_text || null

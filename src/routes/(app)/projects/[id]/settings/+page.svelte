@@ -124,6 +124,9 @@
 	};
 	let requestTimeout = $state<number>(API_DEFAULTS.requestTimeout);
 
+	// Image scaling (for non-PDF images)
+	let imageScale = $state<number>(100); // 100% = no scaling
+
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
 		pdfFormat = PDF_DEFAULTS.format;
@@ -228,6 +231,9 @@
 
 			// Load API request settings
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
+
+			// Load image scaling
+			imageScale = settings.imageScale ?? 100;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -393,6 +399,8 @@
 				includeOcrText,
 				// API request settings
 				requestTimeout,
+				// Image scaling
+				imageScale,
 				// Sampling parameters
 				enableDeterministicMode,
 				temperature,
@@ -1147,6 +1155,46 @@
 						</Tooltip.Root>
 					</div>
 				</div>
+			</div>
+
+			<!-- Image Scale Setting -->
+			<div class="space-y-2">
+				<div class="flex items-center gap-2">
+					<Label for="imageScale">Image Scale</Label>
+					<span class="text-sm text-muted-foreground">{imageScale}%</span>
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+									<HelpCircle class="h-4 w-4" />
+								</button>
+							{/snippet}
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<div class="max-w-xs space-y-1">
+								<p class="font-medium">Image Scaling</p>
+								<p class="text-xs">Scale images before sending to LLM. Lower values reduce API costs but may affect accuracy.</p>
+								<ul class="text-xs list-disc pl-4 mt-2">
+									<li>100%: Original size (no scaling)</li>
+									<li>50%: Half dimensions</li>
+									<li>25%: Quarter dimensions</li>
+								</ul>
+							</div>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				</div>
+				<input
+					type="range"
+					id="imageScale"
+					bind:value={imageScale}
+					min="10"
+					max="100"
+					step="10"
+					class="w-full max-w-xs"
+				/>
+				<p class="text-xs text-muted-foreground">
+					Scale non-PDF images before sending to LLM. 100% = original size.
+				</p>
 			</div>
 
 			<Separator />
