@@ -246,6 +246,72 @@ export class QueueManager {
 		}
 	}
 
+	/**
+	 * Get next job for a specific project (for per-project worker isolation)
+	 */
+	async getNextJobForProject(projectId: string): Promise<QueueJob | null> {
+		try {
+			const pb = await this.getPocketBase();
+			const now = new Date().toISOString();
+
+			// Filter by projectId AND status
+			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
+				filter: `projectId = "${projectId}" && status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+				sort: '+priority,+queuedAt,+created'
+			});
+
+			if (records.items.length === 0) {
+				return null;
+			}
+
+			const record = records.items[0];
+
+			// Same atomic claim logic as getNextJob()
+			try {
+				const freshRecord = await pb.collection(QUEUE_COLLECTION).getOne(record.id);
+				if (freshRecord.status !== 'queued') {
+					console.log(`[Queue] Job ${record.id} already claimed by another worker, skipping`);
+					return null;
+				}
+
+				const updated = await pb.collection(QUEUE_COLLECTION).update(record.id, {
+					status: 'processing',
+					startedAt: new Date().toISOString(),
+					attempts: freshRecord.attempts + 1
+				});
+
+				return this.mapRecordToJob(updated);
+			} catch (updateError: any) {
+				if (updateError.status === 404 || updateError.status === 409) {
+					console.log(`[Queue] Job ${record.id} was modified/deleted by another process`);
+					return null;
+				}
+				throw updateError;
+			}
+		} catch (error) {
+			console.error(`Error getting next job for project ${projectId}:`, error);
+			return null;
+		}
+	}
+
+	/**
+	 * Get all project IDs that have queued jobs (for worker discovery)
+	 */
+	async getProjectsWithQueuedJobs(): Promise<string[]> {
+		const pb = await this.getPocketBase();
+		const now = new Date().toISOString();
+
+		// Get all queued jobs and extract unique projectIds
+		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
+			filter: `status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+			fields: 'projectId'
+		});
+
+		// Extract unique projectIds
+		const projectIds = [...new Set(records.map((r) => r.projectId).filter(Boolean))];
+		return projectIds;
+	}
+
 	async getJobsByProject(projectId: string, status?: JobStatus): Promise<QueueJob[]> {
 		const pb = await this.getPocketBase();
 		const filter = status

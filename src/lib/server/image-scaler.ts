@@ -1,9 +1,12 @@
 /**
  * Image scaling utility for resizing images before LLM processing
- * Uses @napi-rs/canvas for server-side image manipulation
  */
 
-import { createCanvas, loadImage } from '@napi-rs/canvas';
+import sharp from 'sharp';
+
+// Disable cache and limit concurrency for predictable memory usage
+sharp.cache(false);
+sharp.concurrency(1);
 
 export interface ScaleResult {
 	buffer: Buffer;
@@ -25,37 +28,32 @@ export async function scaleImage(
 	scalePercent: number,
 	quality: number = 85
 ): Promise<ScaleResult> {
-	// 100% or higher = no scaling needed
+	// Get image metadata first
+	const metadata = await sharp(buffer).metadata();
+	const originalWidth = metadata.width || 0;
+	const originalHeight = metadata.height || 0;
+
+	// 100% or higher = no scaling needed, just get dimensions
 	if (scalePercent >= 100) {
-		const image = await loadImage(buffer);
 		return {
 			buffer,
 			mimeType: 'image/jpeg',
-			width: image.width,
-			height: image.height
+			width: originalWidth,
+			height: originalHeight
 		};
 	}
 
 	const scale = scalePercent / 100;
-
-	// Load the original image
-	const image = await loadImage(buffer);
-	const originalWidth = image.width;
-	const originalHeight = image.height;
-
-	// Calculate new dimensions
 	const newWidth = Math.round(originalWidth * scale);
 	const newHeight = Math.round(originalHeight * scale);
 
-	// Create canvas with new dimensions
-	const canvas = createCanvas(newWidth, newHeight);
-	const ctx = canvas.getContext('2d');
-
-	// Draw scaled image
-	ctx.drawImage(image, 0, 0, newWidth, newHeight);
-
-	// Convert to JPEG buffer
-	const scaledBuffer = canvas.toBuffer('image/jpeg', quality);
+	const scaledBuffer = await sharp(buffer)
+		.resize(newWidth, newHeight, {
+			fit: 'fill', // Exact dimensions
+			withoutEnlargement: true // Don't upscale
+		})
+		.jpeg({ quality })
+		.toBuffer();
 
 	console.log(
 		`[ImageScaler] Scaled image from ${originalWidth}x${originalHeight} to ${newWidth}x${newHeight} (${scalePercent}%, ${Math.round(scaledBuffer.length / 1024)}KB)`

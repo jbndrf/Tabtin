@@ -1,14 +1,14 @@
 // API endpoint to get queue statistics
 
 import { json } from '@sveltejs/kit';
-import { getQueueManager, getWorker } from '$lib/server/queue';
+import { getQueueManager, getOrchestrator } from '$lib/server/queue';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {
 		const projectId = url.searchParams.get('projectId');
 		const queueManager = getQueueManager();
-		const worker = getWorker();
+		const orchestrator = getOrchestrator();
 
 		let stats;
 		if (projectId) {
@@ -17,12 +17,12 @@ export const GET: RequestHandler = async ({ url }) => {
 			stats = await queueManager.getStats();
 		}
 
-		const workerStats = worker.getStats();
+		const orchestratorStats = orchestrator.getStats();
 
 		return json({
 			success: true,
 			queue: stats,
-			worker: workerStats
+			orchestrator: orchestratorStats
 		});
 	} catch (error: any) {
 		console.error('Error getting queue stats:', error);

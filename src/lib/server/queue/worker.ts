@@ -39,20 +39,35 @@ export class QueueWorker {
 	private projectActiveJobs: Map<string, number> = new Map(); // Track active jobs per project
 	private projectMaxConcurrency: Map<string, number> = new Map(); // Cache max concurrency per project
 	private projectSettingsLastFetch: Map<string, number> = new Map(); // Track when settings were last fetched
+	private projectPoolLastActivity: Map<string, number> = new Map(); // Track last activity per pool
 	private readonly SETTINGS_CACHE_TTL = 10000; // Refresh settings every 10 seconds
+	private readonly POOL_IDLE_TIMEOUT = 10 * 60 * 1000; // Clean up pools after 10 minutes of inactivity
+	private readonly MAX_EMPTY_POLLS = 5; // Stop after 5 consecutive empty polls (10 seconds)
+	private lastPoolCleanup = 0; // Track last cleanup time
 	private pb: PocketBase;
 	private isRunning = false;
 	private processingLoop: NodeJS.Timeout | null = null;
+	private boundProjectId: string | null = null; // null = global mode, string = per-project mode
+
+	/** Callback for orchestrator cleanup when worker stops */
+	public onStopped?: () => void;
 
 	constructor(
 		private config: WorkerConfig,
 		pocketbaseUrl: string,
 		adminEmail: string,
-		adminPassword: string
+		adminPassword: string,
+		projectId?: string // Optional: pass to run in per-project mode
 	) {
+		this.boundProjectId = projectId || null;
 		this.queueManager = new QueueManager(pocketbaseUrl, adminEmail, adminPassword);
 		this.pb = new PocketBase(pocketbaseUrl);
 		this.authenticate(adminEmail, adminPassword);
+	}
+
+	/** Get the project ID this worker is bound to (null if global mode) */
+	getBoundProjectId(): string | null {
+		return this.boundProjectId;
 	}
 
 	/**
@@ -74,7 +89,61 @@ export class QueueWorker {
 			pool.updateConfig(maxConcurrency, requestsPerMinute);
 		}
 
+		// Track last activity for cleanup
+		this.projectPoolLastActivity.set(projectId, Date.now());
+
 		return this.projectPools.get(projectId)!;
+	}
+
+	/**
+	 * Clean up idle project pools to free memory
+	 */
+	private cleanupIdlePools(): void {
+		const now = Date.now();
+
+		// Only run cleanup every minute
+		if (now - this.lastPoolCleanup < 60000) {
+			return;
+		}
+		this.lastPoolCleanup = now;
+
+		// Log memory usage during cleanup
+		this.logMemoryUsage();
+
+		let cleanedCount = 0;
+		for (const [projectId, lastActivity] of this.projectPoolLastActivity) {
+			// Skip if project has active jobs
+			const activeJobs = this.projectActiveJobs.get(projectId) || 0;
+			if (activeJobs > 0) {
+				continue;
+			}
+
+			// Clean up if idle for too long
+			if (now - lastActivity > this.POOL_IDLE_TIMEOUT) {
+				this.projectPools.delete(projectId);
+				this.projectActiveJobs.delete(projectId);
+				this.projectMaxConcurrency.delete(projectId);
+				this.projectSettingsLastFetch.delete(projectId);
+				this.projectPoolLastActivity.delete(projectId);
+				cleanedCount++;
+			}
+		}
+
+		if (cleanedCount > 0) {
+			console.log(`[Pool] Cleaned up ${cleanedCount} idle pool(s), ${this.projectPools.size} remaining`);
+		}
+	}
+
+	/**
+	 * Log current memory usage for monitoring
+	 */
+	private logMemoryUsage(): void {
+		const usage = process.memoryUsage();
+		console.log(
+			`[Memory] Heap: ${Math.round(usage.heapUsed / 1024 / 1024)}MB / ${Math.round(usage.heapTotal / 1024 / 1024)}MB, ` +
+			`RSS: ${Math.round(usage.rss / 1024 / 1024)}MB, ` +
+			`Pools: ${this.projectPools.size}`
+		);
 	}
 
 	private async authenticate(email: string, password: string): Promise<void> {
@@ -93,10 +162,13 @@ export class QueueWorker {
 		}
 
 		this.isRunning = true;
-		console.log('Queue worker started');
-
-		// Clean up any orphaned "processing" batches from previous runs
-		await this.cleanupStaleBatches();
+		if (this.boundProjectId) {
+			console.log(`[Queue] Worker started for project ${this.boundProjectId}`);
+		} else {
+			console.log('[Queue] Global worker started');
+			// Clean up any orphaned "processing" batches from previous runs (only in global mode)
+			await this.cleanupStaleBatches();
+		}
 
 		// Process jobs continuously
 		this.processLoop();
@@ -153,16 +225,34 @@ export class QueueWorker {
 		if (this.processingLoop) {
 			clearTimeout(this.processingLoop);
 		}
-		console.log('Queue worker stopped');
+		if (this.boundProjectId) {
+			console.log(`[Queue] Worker stopped for project ${this.boundProjectId}`);
+		} else {
+			console.log('[Queue] Global worker stopped');
+		}
+		// Notify orchestrator that this worker has stopped
+		this.onStopped?.();
 	}
 
 	private async processLoop(): Promise<void> {
+		let consecutiveEmptyPolls = 0;
+
 		while (this.isRunning) {
 			try {
-				const job = await this.queueManager.getNextJob();
+				// Periodically clean up idle project pools (only in global mode)
+				if (!this.boundProjectId) {
+					this.cleanupIdlePools();
+				}
+
+				// Use project-specific or global job fetching
+				const job = this.boundProjectId
+					? await this.queueManager.getNextJobForProject(this.boundProjectId)
+					: await this.queueManager.getNextJob();
 
 				if (job) {
-					const projectId = (job.data as any)?.projectId;
+					consecutiveEmptyPolls = 0; // Reset counter
+
+					const projectId = (job.data as any)?.projectId || this.boundProjectId;
 
 					if (projectId) {
 						// Check if this project has capacity
@@ -218,6 +308,15 @@ export class QueueWorker {
 						await this.sleep(100);
 					}
 				} else {
+					consecutiveEmptyPolls++;
+
+					// In per-project mode, stop after no jobs for a while
+					if (this.boundProjectId && consecutiveEmptyPolls >= this.MAX_EMPTY_POLLS) {
+						console.log(`[Queue] No more jobs for project ${this.boundProjectId} after ${consecutiveEmptyPolls} polls, stopping worker`);
+						this.isRunning = false;
+						break;
+					}
+
 					// No jobs available, wait before checking again
 					await this.sleep(2000);
 				}
@@ -226,6 +325,9 @@ export class QueueWorker {
 				await this.sleep(5000);
 			}
 		}
+
+		// Notify orchestrator that this worker has stopped
+		this.onStopped?.();
 	}
 
 	private async processJob(job: QueueJob): Promise<void> {
@@ -258,6 +360,9 @@ export class QueueWorker {
 		const { batchId, projectId } = job.data as any;
 		const startTime = Date.now();
 		let images: any[] = [];
+		// Declare outside try block for cleanup in finally
+		let items: ProcessableItem[] = [];
+		let allPages: Array<{ dataUrl: string; extractedText: string | null }> = [];
 
 		// Update batch status to processing
 		await this.pb.collection('image_batches').update(batchId, {
@@ -292,7 +397,7 @@ export class QueueWorker {
 			const maxConcurrency = settings.enableParallelRequests ? (settings.maxConcurrency || 3) : 1;
 
 			// Create ProcessableItem array for parallel conversion
-			const items: ProcessableItem[] = images.map((img, index) => ({
+			items = images.map((img, index) => ({
 				originalIndex: index,
 				image: img,
 				pages: []
@@ -309,7 +414,6 @@ export class QueueWorker {
 			);
 
 			// 2. COLLECT ALL PAGES INTO SINGLE ARRAY (in original order)
-			const allPages: Array<{ dataUrl: string; extractedText: string | null }> = [];
 			for (const item of items.sort((a, b) => a.originalIndex - b.originalIndex)) {
 				allPages.push(...item.pages);
 			}
@@ -372,6 +476,12 @@ export class QueueWorker {
 					const llmStartTime = Date.now();
 					const pageResult = await this.callLlmApi(pageContent, settings, projectId);
 					const llmEndTime = Date.now();
+
+					// Clear pageContent to release base64 string reference
+					pageContent.length = 0;
+
+					// Clear the page's dataUrl from allPages to free memory as we go
+					(pageImage as any).dataUrl = null;
 
 					const inputTokens = pageResult.usage?.prompt_tokens || 0;
 					const outputTokens = pageResult.usage?.completion_tokens || 0;
@@ -459,6 +569,15 @@ export class QueueWorker {
 				const llmStartTime = Date.now();
 				const result = await this.callLlmApi(contentArray, settings, projectId);
 				const llmEndTime = Date.now();
+
+				// Clear contentArray to release base64 string references
+				contentArray.length = 0;
+
+				// Clear allPages to release base64 strings immediately after LLM call
+				for (const page of allPages) {
+					(page as any).dataUrl = null;
+					(page as any).extractedText = null;
+				}
 
 				const inputTokens = result.usage?.prompt_tokens || 0;
 				const outputTokens = result.usage?.completion_tokens || 0;
@@ -554,6 +673,41 @@ export class QueueWorker {
 			});
 
 			throw error;
+		} finally {
+			// ALWAYS clean up large data structures to prevent memory leaks
+			// This runs on both success AND failure paths
+			console.log('[Memory] Cleaning up batch processing data...');
+
+			// Clear page data inside each item first (these hold large base64 strings)
+			for (const item of items) {
+				if (item.pages) {
+					for (const page of item.pages) {
+						(page as any).dataUrl = null;
+						(page as any).extractedText = null;
+					}
+					item.pages.length = 0;
+				}
+				(item as any).image = null;
+			}
+			items.length = 0;
+
+			// Clear allPages array (may already be cleared in success path but ensure on error)
+			for (const page of allPages) {
+				(page as any).dataUrl = null;
+				(page as any).extractedText = null;
+			}
+			allPages.length = 0;
+
+			// Clear images array
+			images.length = 0;
+
+			// Hint to GC that now is a good time to collect
+			if (global.gc) {
+				global.gc();
+			}
+
+			// Log memory after cleanup
+			this.logMemoryUsage();
 		}
 	}
 
@@ -593,6 +747,9 @@ export class QueueWorker {
 	private async processRedo(job: QueueJob): Promise<void> {
 		const { batchId, projectId, rowIndex, redoColumnIds, croppedImageIds, sourceImageIds } = job.data as any;
 		const startTime = Date.now();
+		// Declare outside try block for cleanup in finally
+		let croppedImages: string[] = [];
+		let redoContent: any[] = [];
 
 		try {
 			// Load project and batch
@@ -622,9 +779,6 @@ export class QueueWorker {
 
 			// Create a mapping from LLM image_index (0, 1, 2...) to the actual cropped image ID
 			const imageIndexToCroppedId: string[] = [];
-
-			// Load cropped images
-			const croppedImages: string[] = [];
 			for (const columnId of redoColumnIds) {
 				const imageId = croppedImageIds[columnId];
 				if (!imageId) {
@@ -655,7 +809,7 @@ export class QueueWorker {
 			);
 
 			// Build content array for redo request
-			const redoContent = [
+			redoContent = [
 				{ type: 'text', text: prompt },
 				...croppedImages.map((url) => ({
 					type: 'image_url',
@@ -665,6 +819,10 @@ export class QueueWorker {
 
 			// Call LLM API using unified method
 			const result = await this.callLlmApi(redoContent, settings, projectId);
+
+			// Clear content array and cropped images to release base64 strings
+			redoContent.length = 0;
+			croppedImages.length = 0;
 
 			// Parse and transform LLM response using unified method
 			const rawContent = result.choices[0].message.content;
@@ -762,6 +920,16 @@ export class QueueWorker {
 			});
 
 			throw error;
+		} finally {
+			// ALWAYS clean up large data structures to prevent memory leaks
+			// This runs on both success AND failure paths
+			croppedImages.length = 0;
+			redoContent.length = 0;
+
+			// Hint to GC
+			if (global.gc) {
+				global.gc();
+			}
 		}
 	}
 
@@ -1502,6 +1670,8 @@ export class QueueWorker {
 	/**
 	 * Convert a single image or PDF to base64 data URLs
 	 * Populates item.pages with converted images
+	 *
+	 * Memory management: All intermediate buffers are explicitly nulled to help GC
 	 */
 	private async convertSingleItem(
 		item: ProcessableItem,
@@ -1509,14 +1679,20 @@ export class QueueWorker {
 		imageScale: number = 100
 	): Promise<void> {
 		const url = this.pb.files.getURL(item.image, item.image.image);
-		const response = await fetch(url);
-		const blob = await response.blob();
+		let response: Response | null = await fetch(url);
+		let blob: Blob | null = await response.blob();
+		response = null; // Release response early
 
 		if (isPdfFile(item.image.image)) {
 			console.log(`[Pipeline] Converting PDF: ${item.image.image}`);
-			const arrayBuffer = await blob.arrayBuffer();
-			const buffer = Buffer.from(arrayBuffer);
+			let arrayBuffer: ArrayBuffer | null = await blob.arrayBuffer();
+			blob = null; // Release blob early
+			let buffer: Buffer | null = Buffer.from(arrayBuffer);
+			arrayBuffer = null; // Release arrayBuffer
+
 			const convertedPages = await convertPdfToImages(buffer, item.image.image, pdfOptions);
+			buffer = null; // Release buffer after PDF conversion
+			const pageCount = convertedPages.length;
 
 			for (const page of convertedPages) {
 				const pageDataUrl = `data:${page.mimeType};base64,${page.buffer.toString('base64')}`;
@@ -1524,22 +1700,32 @@ export class QueueWorker {
 					dataUrl: pageDataUrl,
 					extractedText: page.extractedText || null
 				});
+				// Clear the buffer reference to allow GC
+				(page as any).buffer = null;
+				(page as any).extractedText = null;
 			}
-			console.log(`[Pipeline] PDF ${item.image.image} converted to ${convertedPages.length} pages`);
+			// Clear the array to release all references
+			convertedPages.length = 0;
+			console.log(`[Pipeline] PDF ${item.image.image} converted to ${pageCount} pages`);
 		} else {
 			// Convert blob to buffer for processing
-			const arrayBuffer = await blob.arrayBuffer();
-			let imageBuffer: Buffer = Buffer.from(arrayBuffer);
-			let mimeType = blob.type || 'image/jpeg';
+			const mimeType = blob.type || 'image/jpeg';
+			let arrayBuffer: ArrayBuffer | null = await blob.arrayBuffer();
+			blob = null; // Release blob early
+			let imageBuffer: Buffer | null = Buffer.from(arrayBuffer);
+			arrayBuffer = null; // Release arrayBuffer
 
 			// Apply scaling if < 100%
+			let finalMimeType = mimeType;
 			if (imageScale < 100) {
 				const scaled = await scaleImage(imageBuffer, imageScale);
-				imageBuffer = Buffer.from(scaled.buffer);
-				mimeType = scaled.mimeType;
+				imageBuffer = null; // Release original
+				imageBuffer = scaled.buffer; // sharp already returns a Buffer
+				finalMimeType = scaled.mimeType;
 			}
 
-			const dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+			const dataUrl = `data:${finalMimeType};base64,${imageBuffer.toString('base64')}`;
+			imageBuffer = null; // Release buffer after base64 encoding
 			item.pages.push({
 				dataUrl,
 				extractedText: item.image.extracted_text || null

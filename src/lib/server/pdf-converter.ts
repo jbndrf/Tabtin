@@ -1,7 +1,6 @@
 /**
  * Server-side PDF to Image Conversion Utility
- *
- * Uses pdf.js with canvas to convert PDF pages to PNG images at 600 DPI
+ * Uses pdf.js with canvas to convert PDF pages to images
  */
 
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -13,28 +12,24 @@ import { resolve } from 'path';
 const workerPath = resolve(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs');
 pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
 
-// Canvas factory for Node.js environment - required for pdf.js to render images
-class NodeCanvasFactory {
-	create(width: number, height: number) {
-		const canvas = createCanvas(width, height);
-		const context = canvas.getContext('2d');
-		return { canvas, context };
-	}
-
-	reset(canvasAndContext: { canvas: any; context: any }, width: number, height: number) {
-		canvasAndContext.canvas.width = width;
-		canvasAndContext.canvas.height = height;
-	}
-
-	destroy(canvasAndContext: { canvas: any; context: any }) {
-		canvasAndContext.canvas.width = 0;
-		canvasAndContext.canvas.height = 0;
-		canvasAndContext.canvas = null;
-		canvasAndContext.context = null;
-	}
+/** Canvas factory for pdf.js server-side rendering */
+function createNodeCanvasFactory() {
+	return {
+		create(width: number, height: number) {
+			const canvas = createCanvas(width, height);
+			const context = canvas.getContext('2d');
+			return { canvas, context };
+		},
+		reset(canvasAndContext: { canvas: any; context: any }, width: number, height: number) {
+			canvasAndContext.canvas.width = width;
+			canvasAndContext.canvas.height = height;
+		},
+		destroy(canvasAndContext: { canvas: any; context: any }) {
+			canvasAndContext.canvas = null;
+			canvasAndContext.context = null;
+		}
+	};
 }
-
-const canvasFactory = new NodeCanvasFactory();
 
 export interface PdfConversionOptions {
 	/** Scale factor for rendering (default: 8.333 for 600 DPI) */
@@ -94,15 +89,17 @@ export async function convertPdfToImages(
 		quality = 1.0
 	} = options;
 
+	let pdf: any = null;
+	const canvasFactory = createNodeCanvasFactory();
+
 	try {
-		// Load the PDF document with canvas factory for Node.js
 		const loadingTask = pdfjsLib.getDocument({
 			data: new Uint8Array(pdfBuffer),
 			isEvalSupported: false,
 			useSystemFonts: true,
-			canvasFactory: canvasFactory
-		});
-		const pdf = await loadingTask.promise;
+			canvasFactory
+		} as any);
+		pdf = await loadingTask.promise;
 		const totalPages = pdf.numPages;
 
 		console.log(`Converting PDF: ${fileName} (${totalPages} pages) at ${Math.round(scale * 72)} DPI`);
@@ -193,9 +190,20 @@ export async function convertPdfToImages(
 			});
 		}
 
+		// Destroy PDF document to release memory
+		pdf.destroy();
+
 		console.log(`PDF conversion complete: ${convertedPages.length} pages`);
 		return convertedPages;
 	} catch (error) {
+		// Destroy PDF document on error to prevent memory leak
+		if (pdf) {
+			try {
+				pdf.destroy();
+			} catch {
+				// Ignore destroy errors
+			}
+		}
 		console.error('PDF conversion failed:', error);
 		throw new Error(
 			`Failed to convert PDF: ${error instanceof Error ? error.message : 'Unknown error'}`

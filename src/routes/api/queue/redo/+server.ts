@@ -1,7 +1,7 @@
 // API endpoint to enqueue redo processing jobs
 
 import { json } from '@sveltejs/kit';
-import { getQueueManager } from '$lib/server/queue';
+import { getQueueManager, notifyJobEnqueued } from '$lib/server/queue';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -33,6 +33,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			},
 			priority
 		);
+
+		// Notify orchestrator to start worker for this project
+		await notifyJobEnqueued(projectId);
 
 		return json({
 			success: true,

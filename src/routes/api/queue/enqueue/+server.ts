@@ -1,7 +1,7 @@
 // API endpoint to enqueue batch processing jobs
 
 import { json } from '@sveltejs/kit';
-import { getQueueManager } from '$lib/server/queue';
+import { getQueueManager, notifyJobEnqueued } from '$lib/server/queue';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -16,6 +16,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 			const job = await queueManager.enqueueBatch(batchId, projectId, priority);
 
+			// Notify orchestrator to start worker for this project
+			await notifyJobEnqueued(projectId);
+
 			return json({
 				success: true,
 				jobId: job.id,
@@ -27,6 +30,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			const canceledCount = await queueManager.cancelQueuedJobs(projectId, batchIds);
 
 			const jobs = await queueManager.enqueueMultipleBatches(batchIds, projectId, priority);
+
+			// Notify orchestrator to start worker for this project
+			await notifyJobEnqueued(projectId);
 
 			return json({
 				success: true,
