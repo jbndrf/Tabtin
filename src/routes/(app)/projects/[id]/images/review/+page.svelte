@@ -56,6 +56,7 @@
 	let canvasElements = $state<HTMLCanvasElement[]>([]);
 	let imageElements = $state<HTMLImageElement[]>([]);
 	let cardElement = $state<HTMLDivElement>();
+	let loadedImageIndices = $state<Set<number>>(new Set());
 
 	// Expanded images list (includes individual PDF pages)
 	let expandedImages = $state<VirtualImage[]>([]);
@@ -340,6 +341,7 @@
 			// Clear canvas arrays to force re-render
 			canvasElements = [];
 			imageElements = [];
+			loadedImageIndices = new Set();
 
 			// Clear expandedImages - will be repopulated when batch images load
 			expandedImages = [];
@@ -416,6 +418,15 @@
 			}
 		} finally {
 			loadingBatchImages = false;
+		}
+	}
+
+	// Preload image files into browser cache for faster display
+	async function preloadImageFiles(images: ImagesResponse[]) {
+		for (const img of images) {
+			const url = pb.files.getURL(img, img.image);
+			const preloadImg = new Image();
+			preloadImg.src = url;
 		}
 	}
 
@@ -745,14 +756,16 @@
 		ctx.restore();
 	}
 
-	function handleImageLoad(event: Event) {
+	function handleImageLoad(idx: number, event: Event) {
 		const img = event.target as HTMLImageElement;
 		console.log('Image loaded:', {
+			idx,
 			src: img.src.substring(img.src.lastIndexOf('/') + 1),
 			naturalWidth: img.naturalWidth,
 			naturalHeight: img.naturalHeight,
 			complete: img.complete
 		});
+		loadedImageIndices = new Set([...loadedImageIndices, idx]);
 		renderAllCanvases();
 	}
 
@@ -979,7 +992,20 @@
 
 		// Preload next batch images in background
 		if (currentBatchIndex + 1 < allBatches.length && !batches[currentBatchIndex + 1]) {
+			// Load batch metadata
 			loadBatchImages(currentBatchIndex + 1);
+
+			// Also preload actual image files into browser cache
+			const nextBatch = allBatches[currentBatchIndex + 1];
+			pb.collection('images').getFullList<ImagesResponse>({
+				filter: `batch = '${nextBatch.id}'`,
+				sort: 'order',
+				requestKey: `preload_images_${nextBatch.id}`
+			}).then(images => {
+				preloadImageFiles(images);
+			}).catch(() => {
+				// Ignore preload errors - non-critical
+			});
 		}
 	}
 
@@ -2004,6 +2030,11 @@
 								{#each expandedImages as vImage, idx}
 									<div class="relative h-full w-full flex-shrink-0">
 										<div class="relative h-full w-full">
+											{#if !vImage.isPdf && !loadedImageIndices.has(idx)}
+												<div class="absolute inset-0 flex items-center justify-center bg-muted animate-pulse z-10">
+													<span class="text-muted-foreground text-sm">Loading...</span>
+												</div>
+											{/if}
 											<canvas
 												bind:this={canvasElements[idx]}
 												class="h-full w-full"
@@ -2041,7 +2072,7 @@
 												alt="Image {idx + 1}"
 												class="hidden"
 												crossorigin="anonymous"
-												onload={handleImageLoad}
+												onload={(e) => handleImageLoad(idx, e)}
 												onerror={handleImageError}
 											/>
 										{/if}

@@ -15,6 +15,13 @@ import { decode as decodeToon } from '@toon-format/toon';
 import https from 'https';
 import http from 'http';
 import { URL } from 'url';
+import {
+	getEndpointWithLimits,
+	checkEndpointLimits,
+	updateEndpointUsage,
+	type LlmEndpoint
+} from '../admin-auth';
+import { getInstanceLimits } from '../instance-config';
 
 /** Per-request metric data for tracking individual LLM calls within a batch */
 interface RequestDetailData {
@@ -259,6 +266,23 @@ export class QueueWorker {
 						const activeForProject = this.projectActiveJobs.get(projectId) || 0;
 						let maxForProject: number;
 
+						// Get instance limits to cap project settings
+						const instanceLimits = getInstanceLimits();
+
+						// Check concurrent projects limit (free tier = 1 project at a time)
+						const activeProjects = new Set(
+							Array.from(this.projectActiveJobs.entries())
+								.filter(([, count]) => count > 0)
+								.map(([id]) => id)
+						);
+						if (!activeProjects.has(projectId) && activeProjects.size >= instanceLimits.maxConcurrentProjects) {
+							// Another project is already processing, wait
+							console.log(`[Queue] Instance at max concurrent projects (${activeProjects.size}/${instanceLimits.maxConcurrentProjects}), waiting...`);
+							await this.queueManager.requeueJob(job.id);
+							await this.sleep(1000);
+							continue;
+						}
+
 						// Check if we need to refresh settings (cache expired or not set)
 						const lastFetch = this.projectSettingsLastFetch.get(projectId) || 0;
 						const now = Date.now();
@@ -268,16 +292,25 @@ export class QueueWorker {
 							try {
 								const project = await this.pb.collection('projects').getOne(projectId);
 								const settings = project.settings || {};
-								maxForProject = settings.enableParallelRequests ? (settings.maxConcurrency || 3) : 1;
+								// Get project setting, but cap at instance limit
+								const projectMax = settings.enableParallelRequests ? (settings.maxConcurrency || 3) : 1;
+								maxForProject = Math.min(projectMax, instanceLimits.maxParallelRequests);
 								this.projectMaxConcurrency.set(projectId, maxForProject);
 								this.projectSettingsLastFetch.set(projectId, now);
 							} catch (err) {
 								console.error(`[Queue] Failed to load project settings for ${projectId}:`, err);
-								// Fall back to cached value or default
-								maxForProject = this.projectMaxConcurrency.get(projectId) ?? 1;
+								// Fall back to cached value or default (capped at instance limit)
+								maxForProject = Math.min(
+									this.projectMaxConcurrency.get(projectId) ?? 1,
+									instanceLimits.maxParallelRequests
+								);
 							}
 						} else {
-							maxForProject = this.projectMaxConcurrency.get(projectId)!;
+							// Use cached value but still cap at instance limit
+							maxForProject = Math.min(
+								this.projectMaxConcurrency.get(projectId)!,
+								instanceLimits.maxParallelRequests
+							);
 						}
 
 						if (activeForProject >= maxForProject) {
@@ -363,6 +396,7 @@ export class QueueWorker {
 		// Declare outside try block for cleanup in finally
 		let items: ProcessableItem[] = [];
 		let allPages: Array<{ dataUrl: string; extractedText: string | null }> = [];
+		let managedEndpointId: string | null = null;
 
 		// Update batch status to processing
 		await this.pb.collection('image_batches').update(batchId, {
@@ -374,6 +408,21 @@ export class QueueWorker {
 			// Load project settings
 			const project = await this.pb.collection('projects').getOne(projectId);
 			const settings = project.settings;
+
+			// Resolve endpoint settings (managed vs custom)
+			const endpointSettings = await this.resolveEndpointSettings(settings);
+			managedEndpointId = endpointSettings.managedEndpointId;
+
+			// Note: Instance-wide limits are checked at enqueue time in /api/queue/enqueue
+			// No need to re-check here since job is already approved and in processing state
+
+			// Merge resolved endpoint settings into settings for use in LLM calls
+			const effectiveSettings = {
+				...settings,
+				endpoint: endpointSettings.endpoint,
+				apiKey: endpointSettings.apiKey,
+				modelName: endpointSettings.modelName
+			};
 
 			// Fetch images for batch
 			images = await this.pb.collection('images').getFullList({
@@ -474,7 +523,7 @@ export class QueueWorker {
 
 					// Call LLM for this page
 					const llmStartTime = Date.now();
-					const pageResult = await this.callLlmApi(pageContent, settings, projectId);
+					const pageResult = await this.callLlmApi(pageContent, effectiveSettings, projectId);
 					const llmEndTime = Date.now();
 
 					// Clear pageContent to release base64 string reference
@@ -567,7 +616,7 @@ export class QueueWorker {
 
 				// Single LLM call with all pages
 				const llmStartTime = Date.now();
-				const result = await this.callLlmApi(contentArray, settings, projectId);
+				const result = await this.callLlmApi(contentArray, effectiveSettings, projectId);
 				const llmEndTime = Date.now();
 
 				// Clear contentArray to release base64 string references
@@ -647,12 +696,15 @@ export class QueueWorker {
 				status: 'success',
 				imageCount: images.length,
 				extractionCount: parsedData.length,
-				modelUsed: settings.modelName,
+				modelUsed: effectiveSettings.modelName,
 				tokensUsed: totalTokensUsed || null,
 				inputTokens: totalInputTokens || null,
 				outputTokens: totalOutputTokens || null,
 				requestDetails: requestDetails.length > 0 ? requestDetails : undefined
 			});
+
+			// Track endpoint usage for managed endpoints
+			await this.trackEndpointUsage(managedEndpointId, totalInputTokens, totalOutputTokens);
 		} catch (error: any) {
 			// Mark batch as failed
 			await this.pb.collection('image_batches').update(batchId, {
@@ -750,11 +802,27 @@ export class QueueWorker {
 		// Declare outside try block for cleanup in finally
 		let croppedImages: string[] = [];
 		let redoContent: any[] = [];
+		let managedEndpointId: string | null = null;
 
 		try {
 			// Load project and batch
 			const project = await this.pb.collection('projects').getOne(projectId);
 			const settings = project.settings;
+
+			// Resolve endpoint settings (managed vs custom)
+			const endpointSettings = await this.resolveEndpointSettings(settings);
+			managedEndpointId = endpointSettings.managedEndpointId;
+
+			// Note: Instance-wide limits are checked at enqueue time in /api/queue/enqueue
+			// No need to re-check here since job is already approved and in processing state
+
+			// Merge resolved endpoint settings into settings for use in LLM calls
+			const effectiveSettings = {
+				...settings,
+				endpoint: endpointSettings.endpoint,
+				apiKey: endpointSettings.apiKey,
+				modelName: endpointSettings.modelName
+			};
 
 			// Extract feature flags from settings
 			const featureFlags = withFeatureFlagDefaults(settings.featureFlags);
@@ -765,7 +833,7 @@ export class QueueWorker {
 
 			// NEW: Load the specific row to redo
 			const existingRow = await this.pb.collection('extraction_rows').getFirstListItem(
-				`batch = "${batchId}" && row_index = ${rowIndex}`
+				`batch ~ "${batchId}" && row_index = ${rowIndex}`
 			);
 
 			// Separate correct and redo extractions for THIS ROW only
@@ -818,7 +886,7 @@ export class QueueWorker {
 			];
 
 			// Call LLM API using unified method
-			const result = await this.callLlmApi(redoContent, settings, projectId);
+			const result = await this.callLlmApi(redoContent, effectiveSettings, projectId);
 
 			// Clear content array and cropped images to release base64 strings
 			redoContent.length = 0;
@@ -891,21 +959,24 @@ export class QueueWorker {
 				startTime,
 				endTime: Date.now(),
 				status: 'success',
-				imageCount: croppedImages.length,
+				imageCount: redoColumnIds.length,
 				extractionCount: redoExtractions.length,
-				modelUsed: settings.modelName,
+				modelUsed: effectiveSettings.modelName,
 				tokensUsed: inputTokens + outputTokens || null,
 				inputTokens: inputTokens || null,
 				outputTokens: outputTokens || null,
 				requestDetails: [{
 					requestIndex: 0,
 					imageStart: 0,
-					imageEnd: croppedImages.length - 1,
+					imageEnd: redoColumnIds.length - 1,
 					inputTokens,
 					outputTokens,
 					durationMs: Date.now() - startTime
 				}]
 			});
+
+			// Track endpoint usage for managed endpoints
+			await this.trackEndpointUsage(managedEndpointId, inputTokens, outputTokens);
 		} catch (error: any) {
 			// Record failure metrics
 			await this.recordMetrics({
@@ -1386,6 +1457,76 @@ export class QueueWorker {
 		} catch (err: any) {
 			console.error('Failed to create metrics:', err);
 			console.error('Metrics error details:', JSON.stringify(err.response || err, null, 2));
+		}
+	}
+
+	/**
+	 * Resolve endpoint settings - either from managed endpoint or custom settings
+	 * Returns the endpoint ID if managed (for usage tracking), or null if custom
+	 */
+	private async resolveEndpointSettings(settings: any): Promise<{
+		endpoint: string;
+		apiKey: string;
+		modelName: string;
+		managedEndpointId: string | null;
+	}> {
+		// Check if using managed endpoint
+		if (settings.endpoint_mode === 'managed' && settings.managed_endpoint_id) {
+			const endpoint = await getEndpointWithLimits(settings.managed_endpoint_id);
+			if (!endpoint) {
+				throw new Error(`Managed endpoint ${settings.managed_endpoint_id} not found`);
+			}
+			if (!endpoint.is_enabled) {
+				throw new Error(`Managed endpoint ${endpoint.alias} is disabled`);
+			}
+			return {
+				endpoint: endpoint.endpoint_url,
+				apiKey: endpoint.api_key,
+				modelName: endpoint.model_name,
+				managedEndpointId: endpoint.id
+			};
+		}
+
+		// Custom endpoint - use settings directly
+		return {
+			endpoint: settings.endpoint,
+			apiKey: settings.apiKey,
+			modelName: settings.modelName,
+			managedEndpointId: null
+		};
+	}
+
+	/**
+	 * Check if processing is allowed based on instance and endpoint limits
+	 */
+	private async checkProcessingLimits(managedEndpointId: string | null): Promise<{
+		allowed: boolean;
+		reason?: string;
+	}> {
+		// Note: Instance-wide project limits are now enforced in processLoop() before jobs are picked up
+		// This function is kept for endpoint-specific token limits only
+
+		// Check endpoint-specific limits if using managed endpoint
+		if (managedEndpointId) {
+			const endpointCheck = await checkEndpointLimits(managedEndpointId);
+			if (!endpointCheck.allowed) {
+				return endpointCheck;
+			}
+		}
+
+		return { allowed: true };
+	}
+
+	/**
+	 * Track token usage for managed endpoints
+	 */
+	private async trackEndpointUsage(
+		managedEndpointId: string | null,
+		inputTokens: number,
+		outputTokens: number
+	): Promise<void> {
+		if (managedEndpointId && (inputTokens > 0 || outputTokens > 0)) {
+			await updateEndpointUsage(managedEndpointId, inputTokens, outputTokens);
 		}
 	}
 

@@ -2,6 +2,7 @@
 
 import { json } from '@sveltejs/kit';
 import { getQueueManager, notifyJobEnqueued } from '$lib/server/queue';
+import { checkProjectProcessingLimits } from '$lib/server/admin-auth';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -16,6 +17,19 @@ export const POST: RequestHandler = async ({ request }) => {
 					error: 'Missing required fields (batchId, projectId, rowIndex, redoColumnIds, croppedImageIds required)'
 				},
 				{ status: 400 }
+			);
+		}
+
+		// Check limits before accepting jobs
+		const limitCheck = await checkProjectProcessingLimits(projectId);
+		if (!limitCheck.allowed) {
+			return json(
+				{
+					success: false,
+					error: limitCheck.reason,
+					limitExceeded: true
+				},
+				{ status: 429 }
 			);
 		}
 

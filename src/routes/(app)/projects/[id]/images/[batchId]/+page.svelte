@@ -366,6 +366,8 @@
 											<img
 												src={pb.files.getUrl(image, image.image, { thumb: '300x300' })}
 												alt="Image {index + 1}"
+												loading="lazy"
+												decoding="async"
 												class="h-full w-full object-cover transition-transform group-hover:scale-105"
 											/>
 										{/if}

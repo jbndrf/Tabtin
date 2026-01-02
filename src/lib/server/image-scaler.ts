@@ -28,15 +28,30 @@ export async function scaleImage(
 	scalePercent: number,
 	quality: number = 85
 ): Promise<ScaleResult> {
-	// Get image metadata first
-	const metadata = await sharp(buffer).metadata();
+	// First apply EXIF rotation to normalize orientation
+	// This ensures consistent behavior across platforms (Sharp's prebuilt binaries
+	// handle EXIF differently on Alpine vs other systems)
+	const rotatedBuffer = await sharp(buffer)
+		.rotate() // Auto-rotate based on EXIF orientation tag
+		.toBuffer();
+
+	// Get metadata from the correctly-oriented image
+	const metadata = await sharp(rotatedBuffer).metadata();
 	const originalWidth = metadata.width || 0;
 	const originalHeight = metadata.height || 0;
 
-	// 100% or higher = no scaling needed, just get dimensions
+	// 100% or higher = no scaling needed, just convert to JPEG
 	if (scalePercent >= 100) {
+		const outputBuffer = await sharp(rotatedBuffer)
+			.jpeg({ quality })
+			.toBuffer();
+
+		console.log(
+			`[ImageScaler] Applied EXIF rotation: ${originalWidth}x${originalHeight} (100%, ${Math.round(outputBuffer.length / 1024)}KB)`
+		);
+
 		return {
-			buffer,
+			buffer: outputBuffer,
 			mimeType: 'image/jpeg',
 			width: originalWidth,
 			height: originalHeight
@@ -47,7 +62,7 @@ export async function scaleImage(
 	const newWidth = Math.round(originalWidth * scale);
 	const newHeight = Math.round(originalHeight * scale);
 
-	const scaledBuffer = await sharp(buffer)
+	const scaledBuffer = await sharp(rotatedBuffer)
 		.resize(newWidth, newHeight, {
 			fit: 'fill', // Exact dimensions
 			withoutEnlargement: true // Don't upscale

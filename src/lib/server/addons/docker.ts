@@ -477,6 +477,49 @@ export async function isDockerAvailable(): Promise<boolean> {
 }
 
 /**
+ * List all addon containers by label
+ */
+export async function listAddonContainers(): Promise<Docker.ContainerInfo[]> {
+	const containers = await docker.listContainers({
+		all: true,
+		filters: { label: ['tabtin.addon=true'] }
+	});
+	return containers;
+}
+
+/**
+ * Stop all addon containers gracefully
+ */
+export async function stopAllAddonContainers(timeoutSeconds = 10): Promise<void> {
+	const containers = await listAddonContainers();
+
+	if (containers.length === 0) {
+		console.log('[Addon] No addon containers to stop');
+		return;
+	}
+
+	console.log(`[Addon] Stopping ${containers.length} addon container(s)...`);
+
+	await Promise.allSettled(
+		containers.map(async (containerInfo) => {
+			const container = docker.getContainer(containerInfo.Id);
+			const name = containerInfo.Names[0] || containerInfo.Id;
+			try {
+				await container.stop({ t: timeoutSeconds });
+				console.log(`[Addon] Stopped: ${name}`);
+			} catch (error: unknown) {
+				const err = error as { statusCode?: number };
+				if (err.statusCode === 304) {
+					console.log(`[Addon] Already stopped: ${name}`);
+				} else {
+					console.error(`[Addon] Failed to stop ${name}:`, error);
+				}
+			}
+		})
+	);
+}
+
+/**
  * Available addon info from local addons directory
  */
 export interface AvailableAddon {

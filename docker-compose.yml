@@ -40,6 +40,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/addons:/app/addon-data
+      - nginx_cache:/var/cache/nginx
     ports:
       - "80:80"
     depends_on:
@@ -71,3 +72,6 @@ networks:
     ipam:
       config:
         - subnet: 172.27.0.0/16
+
+volumes:
+  nginx_cache:

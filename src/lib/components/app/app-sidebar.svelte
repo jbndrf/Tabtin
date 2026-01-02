@@ -12,14 +12,19 @@
 		Settings,
 		ChevronDown,
 		Puzzle,
-		BarChart3
+		BarChart3,
+		Shield
 	} from 'lucide-svelte';
 	import { page } from '$app/stores';
-	import { enhance } from '$app/forms';
+	import { enhance, applyAction } from '$app/forms';
 	import type { ProjectsResponse } from '$lib/pocketbase-types';
 	import { menuItemsForSection } from '$lib/stores/addons';
+	import { currentUser, pb } from '$lib/stores/auth';
 
 	let { projects = [] }: { projects?: ProjectsResponse[] } = $props();
+
+	// Check if current user is admin
+	let isAdmin = $derived(($currentUser as any)?.is_admin === true);
 
 	// Addon menu items for each section
 	const mainMenuItems = menuItemsForSection('main');
@@ -84,6 +89,17 @@
 							</Sidebar.MenuButton>
 						</a>
 					</Sidebar.MenuItem>
+
+					{#if isAdmin}
+						<Sidebar.MenuItem>
+							<a href="/admin" class="w-full">
+								<Sidebar.MenuButton isActive={isActive('/admin')}>
+									<Shield class="h-4 w-4" />
+									<span>Admin</span>
+								</Sidebar.MenuButton>
+							</a>
+						</Sidebar.MenuItem>
+					{/if}
 
 					<!-- Addon menu items for 'main' section -->
 					{#each $mainMenuItems as { item } (item.id)}
@@ -183,7 +199,18 @@
 					<ThemeToggle />
 					<LanguageSelector />
 				</div>
-				<form method="POST" action="/logout" use:enhance class="flex-1">
+				<form
+					method="POST"
+					action="/logout"
+					use:enhance={() => {
+						return async ({ result }) => {
+							// Clear client-side PocketBase auth (including localStorage)
+							pb.authStore.clear();
+							await applyAction(result);
+						};
+					}}
+					class="flex-1"
+				>
 					<Button type="submit" variant="ghost" size="sm" class="w-full justify-start">
 						<LogOut class="mr-2 h-4 w-4" />
 						<span>{t('nav.logout')}</span>

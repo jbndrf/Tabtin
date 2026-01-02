@@ -8,6 +8,7 @@ declare global {
 		interface Locals {
 			pb: PocketBase;
 			user: RecordModel | null;
+			isAdmin: boolean;
 		}
 		// interface PageData {}
 		// interface PageState {}

@@ -1,10 +1,10 @@
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import PocketBase from 'pocketbase';
 import { redirect, type Handle } from '@sveltejs/kit';
-import { startWorker, stopWorker } from '$lib/server/queue';
+import { startWorker } from '$lib/server/queue';
+import { runStartupTasks, initShutdownHandlers } from '$lib/server/startup';
 
-// Use a global variable to track worker state across hot-reloads
-// This is necessary because module-level variables are reset on hot-reload
+// Global flags to track worker state across hot-reloads
 declare global {
 	// eslint-disable-next-line no-var
 	var __queueWorkerStarted: boolean;
@@ -12,14 +12,19 @@ declare global {
 	var __queueWorkerStarting: boolean;
 }
 
-// Initialize globals if they don't exist
 globalThis.__queueWorkerStarted = globalThis.__queueWorkerStarted ?? false;
 globalThis.__queueWorkerStarting = globalThis.__queueWorkerStarting ?? false;
+
+// Register shutdown handlers once (persists across HMR)
+initShutdownHandlers();
 
 // Start the background worker on server startup (only once)
 if (!globalThis.__queueWorkerStarted && !globalThis.__queueWorkerStarting) {
 	globalThis.__queueWorkerStarting = true;
-	startWorker()
+
+	// Run startup tasks first, then start worker
+	runStartupTasks()
+		.then(() => startWorker())
 		.then(() => {
 			console.log('[Queue] Background worker started successfully');
 			globalThis.__queueWorkerStarted = true;
@@ -62,11 +67,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 			await event.locals.pb.collection('users').authRefresh();
 			// Set the user in locals for API routes
 			event.locals.user = event.locals.pb.authStore.record;
+			// Set admin status from user record
+			event.locals.isAdmin = event.locals.user?.is_admin === true;
+		} else {
+			event.locals.isAdmin = false;
 		}
 	} catch (_) {
 		// Clear auth store if refresh fails (token expired or invalid)
 		event.locals.pb.authStore.clear();
 		event.locals.user = null;
+		event.locals.isAdmin = false;
 	}
 
 	// Redirect unauthenticated users to login (except for public routes)

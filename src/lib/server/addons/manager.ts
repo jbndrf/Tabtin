@@ -401,6 +401,58 @@ export class AddonManager {
 	}
 
 	/**
+	 * Start all addons that were previously running
+	 * Called on application startup to restore addon state
+	 */
+	async startPreviouslyRunning(): Promise<void> {
+		await this.authenticate();
+
+		if (!(await isDockerAvailable())) {
+			console.log('[AddonManager] Docker not available, skipping addon startup');
+			return;
+		}
+
+		try {
+			const addons = (await this.pb.collection('installed_addons').getFullList({
+				filter: 'container_status = "running"'
+			})) as unknown as InstalledAddon[];
+
+			if (addons.length === 0) {
+				console.log('[AddonManager] No previously running addons to start');
+				return;
+			}
+
+			console.log(`[AddonManager] Starting ${addons.length} previously running addon(s)`);
+
+			for (const addon of addons) {
+				try {
+					if (!addon.container_id) {
+						console.warn(`[AddonManager] Addon ${addon.name} has no container_id, skipping`);
+						continue;
+					}
+
+					const status = await getContainerStatus(addon.container_id);
+
+					if (status === 'not_found') {
+						await this.updateStatus(addon.id, 'stopped');
+						console.log(`[AddonManager] Container for ${addon.name} not found, marked as stopped`);
+					} else if (status === 'stopped') {
+						await startContainer(addon.container_id);
+						console.log(`[AddonManager] Started addon: ${addon.name}`);
+					} else if (status === 'running') {
+						console.log(`[AddonManager] Addon ${addon.name} already running`);
+					}
+				} catch (error) {
+					console.error(`[AddonManager] Failed to start addon ${addon.name}:`, error);
+					await this.updateStatus(addon.id, 'failed');
+				}
+			}
+		} catch (error) {
+			console.error('[AddonManager] Failed to start previously running addons:', error);
+		}
+	}
+
+	/**
 	 * Sync addon status with actual container status
 	 */
 	async syncStatus(addonId: string): Promise<InstalledAddon> {

@@ -107,6 +107,23 @@ DONTS:
 - DO NOT guess coordinates for unclear locations
 - DO NOT use pixel values - always use 0-1000 normalized range`;
 
+const RULES_BOUNDING_BOXES_TOON = (coordFields: string[]) => `
+BOUNDING BOXES:
+Provide coordinates showing WHERE each value appears in the image.
+
+COORDINATE SYSTEM:
+- Values normalized to 0-1000 range (0=top/left edge, 1000=bottom/right edge)
+- Output coordinates as separate fields: ${coordFields.join(', ')}
+- For multi-line values, use bbox that covers ALL lines
+
+DOS:
+- DO provide bbox for the actual text location
+- DO set all coordinate fields to 0 for fields not present in image
+
+DONTS:
+- DO NOT guess coordinates for unclear locations
+- DO NOT use pixel values - always use 0-1000 normalized range`;
+
 const RULES_CONFIDENCE = `
 CONFIDENCE SCORES:
 The user wants to know how certain you are about each extracted value. This helps prioritize which extractions need human review. Low confidence values will be flagged for manual verification.
@@ -264,7 +281,7 @@ function generateToonFormatSection(
 		values.push(String(imgIdx));
 
 		if (featureFlags.boundingBoxes) {
-			values.push(...coordFields.map(() => '<coord>'));
+			values.push(...coordFields.map(f => `<${f}>`));
 		}
 
 		if (featureFlags.confidenceScores) {
@@ -303,7 +320,7 @@ ${sampleRows.join('\n')}
 
 Replace:
 - <extracted_value> with actual data from images (or null if not present)
-- <coord> with coordinates 0-1000 (or 0 if not present)
+- <x1>, <y1>, <x2>, <y2> (or similar coordinate fields) with values 0-1000 (or 0 if not present)
 - <conf> with confidence 0.0-1.0
 - [${exampleCount}] with your actual extraction count`;
 }
@@ -326,7 +343,7 @@ function generateJsonFormatSection(
 		example += `      "image_index": ${imgIdx}`;
 
 		if (featureFlags.boundingBoxes) {
-			example += `,\n      "bbox_2d": ${bboxOrder.replace(/[a-z_]+/g, '<coord>')}`;
+			example += `,\n      "bbox_2d": ${bboxOrder}`;
 		}
 
 		if (featureFlags.confidenceScores) {
@@ -363,7 +380,7 @@ ${examples.join('\n')}
 
 Replace:
 - <extracted_value> with actual data from images (or null if not present)
-- <coord> with coordinates 0-1000 (or 0 if not present)
+- x1, y1, x2, y2 (or similar coordinate fields) with actual values 0-1000 (or 0 if not present)
 - <conf> with confidence 0.0-1.0`;
 }
 
@@ -400,7 +417,12 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 	}
 
 	if (featureFlags.boundingBoxes) {
-		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
+		if (featureFlags.toonOutput) {
+			const coordFields = parseBboxOrderToFields(bboxOrder);
+			sections.push(RULES_BOUNDING_BOXES_TOON(coordFields));
+		} else {
+			sections.push(RULES_BOUNDING_BOXES(bboxOrder));
+		}
 	}
 
 	if (featureFlags.confidenceScores) {
@@ -466,7 +488,12 @@ DO NOT re-extract these items.`);
 	}
 
 	if (featureFlags.boundingBoxes) {
-		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
+		if (featureFlags.toonOutput) {
+			const coordFields = parseBboxOrderToFields(bboxOrder);
+			sections.push(RULES_BOUNDING_BOXES_TOON(coordFields));
+		} else {
+			sections.push(RULES_BOUNDING_BOXES(bboxOrder));
+		}
 	}
 
 	if (featureFlags.confidenceScores) {

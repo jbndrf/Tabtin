@@ -36,6 +36,18 @@
 	let endpoint = $state('');
 	let apiKey = $state('');
 	let modelName = $state('');
+
+	// Managed endpoint settings
+	let endpointMode = $state<'managed' | 'custom'>('custom');
+	let managedEndpointId = $state<string>('');
+	let managedEndpoints = $state<Array<{
+		id: string;
+		alias: string;
+		model_name: string;
+		provider_type: string;
+		description?: string;
+	}>>([]);
+	let loadingEndpoints = $state(false);
 	let availableModels = $state<Array<{ id: string; name?: string }>>([]);
 	let fetchingModels = $state(false);
 	let saving = $state(false);
@@ -81,6 +93,13 @@
 	let requestsPerMinute = $state<number>(15);
 	let enableParallelRequests = $state<boolean>(false);
 	let maxConcurrency = $state<number>(3);
+
+	// Instance limits (global caps from server)
+	let instanceLimits = $state<{
+		maxConcurrentProjects: number;
+		maxParallelRequests: number;
+		maxRequestsPerMinute: number;
+	} | null>(null);
 
 	// Sampling parameters (for deterministic/reproducible outputs)
 	const SAMPLING_DEFAULTS = {
@@ -144,6 +163,16 @@
 
 	// Load project data on mount
 	onMount(async () => {
+		// Fetch instance limits
+		try {
+			const res = await fetch('/api/instance-limits');
+			if (res.ok) {
+				instanceLimits = await res.json();
+			}
+		} catch (e) {
+			console.error('Failed to load instance limits:', e);
+		}
+
 		// Load project from store (will use cache if available)
 		await projectData.loadProject(data.projectId, $currentUser?.id || '');
 		loadProject();
@@ -184,6 +213,22 @@
 		}
 	});
 
+	// Load available managed endpoints from the server
+	async function loadManagedEndpoints() {
+		loadingEndpoints = true;
+		try {
+			const res = await fetch('/api/endpoints');
+			if (res.ok) {
+				const data = await res.json();
+				managedEndpoints = data.endpoints || [];
+			}
+		} catch (err) {
+			console.error('Failed to load managed endpoints:', err);
+		} finally {
+			loadingEndpoints = false;
+		}
+	}
+
 	async function loadProject() {
 		if (!$currentProject) return;
 
@@ -197,6 +242,13 @@
 			endpoint = settings.endpoint || '';
 			apiKey = settings.apiKey || '';
 			modelName = settings.modelName || '';
+
+			// Load managed endpoint settings
+			endpointMode = settings.endpoint_mode || 'custom';
+			managedEndpointId = settings.managed_endpoint_id || '';
+
+			// Load available managed endpoints
+			await loadManagedEndpoints();
 
 			// Load prompt templates
 			promptTemplate = settings.promptTemplate || '';
@@ -376,19 +428,30 @@
 		try {
 			saving = true;
 
+			// Cap values at instance limits (enforce even if UI was bypassed)
+			const cappedRequestsPerMinute = instanceLimits
+				? Math.min(requestsPerMinute, instanceLimits.maxRequestsPerMinute)
+				: requestsPerMinute;
+			const cappedMaxConcurrency = instanceLimits
+				? Math.min(maxConcurrency, instanceLimits.maxParallelRequests)
+				: maxConcurrency;
+
 			const settings = {
 				description,
 				endpointPreset,
 				endpoint,
 				apiKey,
 				modelName,
+				// Managed endpoint settings
+				endpoint_mode: endpointMode,
+				managed_endpoint_id: endpointMode === 'managed' ? managedEndpointId : null,
 				promptTemplate,
 				reviewPromptTemplate,
 				selectedPreset,
 				coordinateFormat,
-				requestsPerMinute,
+				requestsPerMinute: cappedRequestsPerMinute,
 				enableParallelRequests,
-				maxConcurrency,
+				maxConcurrency: cappedMaxConcurrency,
 				featureFlags,
 				// PDF processing settings
 				pdfDpi,
@@ -627,6 +690,72 @@
 					</p>
 				</div>
 
+				<!-- Endpoint Mode Selection -->
+				<div class="space-y-2">
+					<Label>Endpoint Mode</Label>
+					<div class="flex gap-2">
+						<Button
+							variant={endpointMode === 'managed' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => endpointMode = 'managed'}
+							disabled={managedEndpoints.length === 0}
+						>
+							Managed
+						</Button>
+						<Button
+							variant={endpointMode === 'custom' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => endpointMode = 'custom'}
+						>
+							Custom
+						</Button>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						{#if endpointMode === 'managed'}
+							Use a pre-configured endpoint managed by your administrator.
+						{:else}
+							Configure your own API endpoint and credentials.
+						{/if}
+					</p>
+				</div>
+
+				<!-- Managed Endpoint Selection -->
+				{#if endpointMode === 'managed'}
+					<div class="space-y-2">
+						<Label for="managedEndpoint">Select Endpoint</Label>
+						{#if loadingEndpoints}
+							<div class="flex items-center gap-2 text-sm text-muted-foreground">
+								<span class="animate-spin">...</span> Loading endpoints...
+							</div>
+						{:else if managedEndpoints.length === 0}
+							<div class="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+								No managed endpoints available. Contact your administrator or use a custom endpoint.
+							</div>
+						{:else}
+							<select
+								id="managedEndpoint"
+								bind:value={managedEndpointId}
+								class="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<option value="">Select an endpoint...</option>
+								{#each managedEndpoints as ep}
+									<option value={ep.id}>
+										{ep.alias} ({ep.model_name}) - {ep.provider_type}
+									</option>
+								{/each}
+							</select>
+							{#if managedEndpointId}
+								{@const selected = managedEndpoints.find(e => e.id === managedEndpointId)}
+								{#if selected?.description}
+									<p class="text-xs text-muted-foreground">{selected.description}</p>
+								{/if}
+							{/if}
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Custom Endpoint Configuration -->
+				{#if endpointMode === 'custom'}
 				<div class="space-y-2">
 					<Label for="endpointPreset">{t('project.settings.vision.endpoint_preset_label')}</Label>
 					<select
@@ -759,6 +888,7 @@
 						{t('project.settings.vision.model_name_help')}
 					</p>
 				</div>
+				{/if}
 			</div>
 
 			<Separator />
@@ -775,6 +905,9 @@
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
 						<Label for="requestsPerMinute">Requests Per Minute</Label>
+						{#if instanceLimits}
+							<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxRequestsPerMinute})</span>
+						{/if}
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
@@ -799,7 +932,7 @@
 						id="requestsPerMinute"
 						bind:value={requestsPerMinute}
 						min="1"
-						max="1000"
+						max={instanceLimits?.maxRequestsPerMinute ?? 1000}
 						placeholder="15"
 						class="h-12"
 					/>
@@ -843,6 +976,9 @@
 						<div class="ml-6 mt-3 space-y-2">
 							<div class="flex items-center gap-2">
 								<Label for="maxConcurrency">Max Concurrent Requests</Label>
+								{#if instanceLimits}
+									<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxParallelRequests})</span>
+								{/if}
 								<Tooltip.Root>
 									<Tooltip.Trigger>
 										{#snippet child({ props })}
@@ -863,7 +999,7 @@
 								id="maxConcurrency"
 								bind:value={maxConcurrency}
 								min="1"
-								max="20"
+								max={instanceLimits?.maxParallelRequests ?? 20}
 								placeholder="3"
 								class="h-12 max-w-32"
 							/>

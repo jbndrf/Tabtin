@@ -196,4 +196,7 @@
 			<span>{t('nav.results')}</span>
 		</a>
 	</nav>
+
+	<!-- Spacer to prevent content from being hidden behind the nav on mobile -->
+	<div class="h-16 md:hidden" aria-hidden="true"></div>
 {/if}

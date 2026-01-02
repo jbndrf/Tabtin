@@ -11,9 +11,13 @@ export enum Collections {
 	Mfas = "_mfas",
 	Otps = "_otps",
 	Superusers = "_superusers",
+	AppSettings = "app_settings",
+	EndpointUsage = "endpoint_usage",
 	ExtractionRows = "extraction_rows",
 	ImageBatches = "image_batches",
 	Images = "images",
+	InstalledAddons = "installed_addons",
+	LlmEndpoints = "llm_endpoints",
 	ProcessingMetrics = "processing_metrics",
 	Projects = "projects",
 	QueueJobs = "queue_jobs",
@@ -96,6 +100,26 @@ export type SuperusersRecord = {
 	verified?: boolean
 }
 
+export type AppSettingsRecord = {
+	allow_custom_endpoints?: boolean
+	allow_registration?: boolean
+	created?: IsoDateString
+	id: string
+	require_email_verification?: boolean
+	updated?: IsoDateString
+}
+
+export type EndpointUsageRecord = {
+	created?: IsoDateString
+	date: IsoDateString
+	endpoint: RecordIdString
+	id: string
+	input_tokens_used?: number
+	output_tokens_used?: number
+	request_count?: number
+	updated?: IsoDateString
+}
+
 export enum ExtractionRowsStatusOptions {
 	"pending" = "pending",
 	"review" = "review",
@@ -124,6 +148,7 @@ export enum ImageBatchesStatusOptions {
 }
 export type ImageBatchesRecord<Tprocessed_data = unknown> = {
 	created?: IsoDateString
+	error_message?: string
 	id: string
 	processed_data?: null | Tprocessed_data
 	project: RecordIdString[]
@@ -136,12 +161,63 @@ export type ImagesRecord<Tbbox_used = unknown> = {
 	batch: RecordIdString[]
 	bbox_used?: null | Tbbox_used
 	column_id?: string
+	created?: IsoDateString
 	extracted_text?: string
 	id: string
 	image: string
 	is_cropped?: boolean
 	order: number
 	parent_image?: RecordIdString[]
+	updated?: IsoDateString
+}
+
+export enum InstalledAddonsContainerStatusOptions {
+	"pending" = "pending",
+	"building" = "building",
+	"starting" = "starting",
+	"running" = "running",
+	"stopped" = "stopped",
+	"failed" = "failed",
+}
+export type InstalledAddonsRecord<Tconfig = unknown, Tmanifest = unknown> = {
+	auth_token?: string
+	config?: null | Tconfig
+	container_id?: string
+	container_status: InstalledAddonsContainerStatusOptions
+	created?: IsoDateString
+	docker_image: string
+	error_message?: string
+	id: string
+	internal_url?: string
+	manifest?: null | Tmanifest
+	name: string
+	updated?: IsoDateString
+	user: RecordIdString
+}
+
+export enum LlmEndpointsProviderTypeOptions {
+	"openai" = "openai",
+	"anthropic" = "anthropic",
+	"google" = "google",
+	"custom" = "custom",
+}
+export type LlmEndpointsRecord = {
+	alias: string
+	api_key: string
+	created?: IsoDateString
+	default_temperature?: number
+	default_top_k?: number
+	default_top_p?: number
+	description?: string
+	endpoint_url: string
+	id: string
+	is_enabled?: boolean
+	is_predefined?: boolean
+	max_input_tokens_per_day: number
+	max_output_tokens_per_day: number
+	model_name: string
+	provider_type?: LlmEndpointsProviderTypeOptions
+	updated?: IsoDateString
 }
 
 export enum ProcessingMetricsJobTypeOptions {
@@ -153,7 +229,7 @@ export enum ProcessingMetricsStatusOptions {
 	"success" = "success",
 	"failed" = "failed",
 }
-export type ProcessingMetricsRecord = {
+export type ProcessingMetricsRecord<TrequestDetails = unknown> = {
 	batchId: string
 	created?: IsoDateString
 	durationMs: number
@@ -162,21 +238,27 @@ export type ProcessingMetricsRecord = {
 	extractionCount?: number
 	id: string
 	imageCount: number
+	inputTokens?: number
 	jobType: ProcessingMetricsJobTypeOptions
 	modelUsed?: string
+	outputTokens?: number
 	projectId: string
+	requestDetails?: null | TrequestDetails
 	startTime: IsoDateString
 	status: ProcessingMetricsStatusOptions
 	tokensUsed?: number
 	updated?: IsoDateString
 }
 
-export type ProjectsRecord<Tschema_chat_history = unknown, Tsettings = unknown> = {
+export type ProjectsRecord<Tdocument_analyses = unknown, Tschema_chat_history = unknown, Tsettings = unknown> = {
+	created?: IsoDateString
+	document_analyses?: null | Tdocument_analyses
 	id: string
 	name: string
 	schema_chat_history?: null | Tschema_chat_history
 	settings?: null | Tsettings
-	user: RecordIdString[]
+	updated?: IsoDateString
+	user: RecordIdString
 }
 
 export enum QueueJobsTypeOptions {
@@ -195,15 +277,18 @@ export enum QueueJobsStatusOptions {
 export type QueueJobsRecord<Tdata = unknown> = {
 	attempts?: number
 	completedAt?: IsoDateString
+	created?: IsoDateString
 	data: null | Tdata
 	id: string
 	lastError?: string
 	maxAttempts: number
 	priority: number
 	projectId: string
+	queuedAt?: IsoDateString
 	startedAt?: IsoDateString
 	status: QueueJobsStatusOptions
 	type: QueueJobsTypeOptions
+	updated?: IsoDateString
 }
 
 export type UsersRecord = {
@@ -212,6 +297,7 @@ export type UsersRecord = {
 	email: string
 	emailVisibility?: boolean
 	id: string
+	is_admin?: boolean
 	name?: string
 	password: string
 	tokenKey: string
@@ -225,11 +311,15 @@ export type ExternalauthsResponse<Texpand = unknown> = Required<ExternalauthsRec
 export type MfasResponse<Texpand = unknown> = Required<MfasRecord> & BaseSystemFields<Texpand>
 export type OtpsResponse<Texpand = unknown> = Required<OtpsRecord> & BaseSystemFields<Texpand>
 export type SuperusersResponse<Texpand = unknown> = Required<SuperusersRecord> & AuthSystemFields<Texpand>
+export type AppSettingsResponse<Texpand = unknown> = Required<AppSettingsRecord> & BaseSystemFields<Texpand>
+export type EndpointUsageResponse<Texpand = unknown> = Required<EndpointUsageRecord> & BaseSystemFields<Texpand>
 export type ExtractionRowsResponse<Trow_data = unknown, Texpand = unknown> = Required<ExtractionRowsRecord<Trow_data>> & BaseSystemFields<Texpand>
 export type ImageBatchesResponse<Tprocessed_data = unknown, Texpand = unknown> = Required<ImageBatchesRecord<Tprocessed_data>> & BaseSystemFields<Texpand>
 export type ImagesResponse<Tbbox_used = unknown, Texpand = unknown> = Required<ImagesRecord<Tbbox_used>> & BaseSystemFields<Texpand>
-export type ProcessingMetricsResponse<Texpand = unknown> = Required<ProcessingMetricsRecord> & BaseSystemFields<Texpand>
-export type ProjectsResponse<Tschema_chat_history = unknown, Tsettings = unknown, Texpand = unknown> = Required<ProjectsRecord<Tschema_chat_history, Tsettings>> & BaseSystemFields<Texpand>
+export type InstalledAddonsResponse<Tconfig = unknown, Tmanifest = unknown, Texpand = unknown> = Required<InstalledAddonsRecord<Tconfig, Tmanifest>> & BaseSystemFields<Texpand>
+export type LlmEndpointsResponse<Texpand = unknown> = Required<LlmEndpointsRecord> & BaseSystemFields<Texpand>
+export type ProcessingMetricsResponse<TrequestDetails = unknown, Texpand = unknown> = Required<ProcessingMetricsRecord<TrequestDetails>> & BaseSystemFields<Texpand>
+export type ProjectsResponse<Tdocument_analyses = unknown, Tschema_chat_history = unknown, Tsettings = unknown, Texpand = unknown> = Required<ProjectsRecord<Tdocument_analyses, Tschema_chat_history, Tsettings>> & BaseSystemFields<Texpand>
 export type QueueJobsResponse<Tdata = unknown, Texpand = unknown> = Required<QueueJobsRecord<Tdata>> & BaseSystemFields<Texpand>
 export type UsersResponse<Texpand = unknown> = Required<UsersRecord> & AuthSystemFields<Texpand>
 
@@ -241,9 +331,13 @@ export type CollectionRecords = {
 	_mfas: MfasRecord
 	_otps: OtpsRecord
 	_superusers: SuperusersRecord
+	app_settings: AppSettingsRecord
+	endpoint_usage: EndpointUsageRecord
 	extraction_rows: ExtractionRowsRecord
 	image_batches: ImageBatchesRecord
 	images: ImagesRecord
+	installed_addons: InstalledAddonsRecord
+	llm_endpoints: LlmEndpointsRecord
 	processing_metrics: ProcessingMetricsRecord
 	projects: ProjectsRecord
 	queue_jobs: QueueJobsRecord
@@ -256,9 +350,13 @@ export type CollectionResponses = {
 	_mfas: MfasResponse
 	_otps: OtpsResponse
 	_superusers: SuperusersResponse
+	app_settings: AppSettingsResponse
+	endpoint_usage: EndpointUsageResponse
 	extraction_rows: ExtractionRowsResponse
 	image_batches: ImageBatchesResponse
 	images: ImagesResponse
+	installed_addons: InstalledAddonsResponse
+	llm_endpoints: LlmEndpointsResponse
 	processing_metrics: ProcessingMetricsResponse
 	projects: ProjectsResponse
 	queue_jobs: QueueJobsResponse
@@ -274,9 +372,13 @@ export type TypedPocketBase = PocketBase & {
 	collection(idOrName: '_mfas'): RecordService<MfasResponse>
 	collection(idOrName: '_otps'): RecordService<OtpsResponse>
 	collection(idOrName: '_superusers'): RecordService<SuperusersResponse>
+	collection(idOrName: 'app_settings'): RecordService<AppSettingsResponse>
+	collection(idOrName: 'endpoint_usage'): RecordService<EndpointUsageResponse>
 	collection(idOrName: 'extraction_rows'): RecordService<ExtractionRowsResponse>
 	collection(idOrName: 'image_batches'): RecordService<ImageBatchesResponse>
 	collection(idOrName: 'images'): RecordService<ImagesResponse>
+	collection(idOrName: 'installed_addons'): RecordService<InstalledAddonsResponse>
+	collection(idOrName: 'llm_endpoints'): RecordService<LlmEndpointsResponse>
 	collection(idOrName: 'processing_metrics'): RecordService<ProcessingMetricsResponse>
 	collection(idOrName: 'projects'): RecordService<ProjectsResponse>
 	collection(idOrName: 'queue_jobs'): RecordService<QueueJobsResponse>

@@ -2,11 +2,25 @@
 
 import { json } from '@sveltejs/kit';
 import { getQueueManager, notifyJobEnqueued } from '$lib/server/queue';
+import { checkProjectProcessingLimits } from '$lib/server/admin-auth';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const { batchId, batchIds, projectId, priority = 10 } = await request.json();
+
+		// Check limits before accepting jobs
+		const limitCheck = await checkProjectProcessingLimits(projectId);
+		if (!limitCheck.allowed) {
+			return json(
+				{
+					success: false,
+					error: limitCheck.reason,
+					limitExceeded: true
+				},
+				{ status: 429 }
+			);
+		}
 
 		const queueManager = getQueueManager();
 

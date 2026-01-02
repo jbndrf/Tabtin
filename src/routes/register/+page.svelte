@@ -37,10 +37,35 @@
 	</div>
 	<Card.Root class="w-full max-w-md">
 		<Card.Header>
-			<Card.Title class="text-2xl">Create Account</Card.Title>
-			<Card.Description>Get started by creating a new account</Card.Description>
+			<Card.Title class="text-2xl">
+				{#if data.isFirstUser}
+					Setup Admin Account
+				{:else}
+					Create Account
+				{/if}
+			</Card.Title>
+			<Card.Description>
+				{#if data.isFirstUser}
+					Create the first admin account to get started
+				{:else if !data.registrationAllowed}
+					Registration is currently disabled
+				{:else}
+					Get started by creating a new account
+				{/if}
+			</Card.Description>
 		</Card.Header>
 		<Card.Content>
+			{#if !data.registrationAllowed && !data.isFirstUser}
+				<div class="space-y-4">
+					<p class="text-sm text-muted-foreground">
+						New user registration has been disabled by the administrator.
+						Please contact an admin if you need access.
+					</p>
+					<a href="/login" class="block">
+						<Button variant="outline" class="w-full">Back to Login</Button>
+					</a>
+				</div>
+			{:else}
 			<form method="POST" use:enhance class="space-y-4">
 				<Form.Field {form} name="name">
 					{#snippet children({ constraints, errors, tainted, value })}
@@ -120,13 +145,22 @@
 					</div>
 				{/if}
 
-				<Form.Button class="w-full">Create Account</Form.Button>
+				<Form.Button class="w-full">
+					{#if data.isFirstUser}
+						Create Admin Account
+					{:else}
+						Create Account
+					{/if}
+				</Form.Button>
 			</form>
 
+			{#if !data.isFirstUser}
 			<div class="mt-4 text-center text-sm">
 				<span class="text-muted-foreground">Already have an account?</span>
 				<a href="/login" class="ml-1 text-primary hover:underline">Sign in here</a>
 			</div>
+			{/if}
+			{/if}
 		</Card.Content>
 	</Card.Root>
 </div>

@@ -27,6 +27,9 @@ WORKDIR /app
 # Install nginx
 RUN apk add --no-cache nginx
 
+# Create nginx cache directory for PocketBase file caching
+RUN mkdir -p /var/cache/nginx/pocketbase
+
 # Copy package files for production dependencies
 COPY package*.json ./
 

@@ -4,6 +4,7 @@
 	import * as Badge from '$lib/components/ui/badge';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { t } from '$lib/i18n';
 	import { Upload, ImageIcon, Play, Trash2, X, Check, RotateCw, ChevronDown, RefreshCcw, CheckSquare, FileText } from 'lucide-svelte';
 	import type { PageData } from './$types';
@@ -27,6 +28,11 @@
 	let batchesPerPage = $state(50);
 	let currentPage = $state(1);
 	let imagesLoaded = $state(false);
+	let loadedImages = $state<Set<string>>(new Set());
+
+	function handleImageLoad(batchId: string) {
+		loadedImages = new Set([...loadedImages, batchId]);
+	}
 
 	// Check if project has a model configured
 	let hasModelConfigured = $derived(
@@ -774,11 +780,19 @@
 											<span class="mt-2 text-xs font-medium text-muted-foreground">PDF</span>
 										</div>
 									{:else}
-										<img
-											src={pb.files.getUrl(batch.firstImage, batch.firstImage.image, { thumb: '300x300' })}
-											alt={t('images.gallery.batch_thumbnail')}
-											class="h-full w-full object-cover transition-transform group-hover:scale-105 {selectedBatches.has(batch.id) ? 'opacity-60' : ''}"
-										/>
+										<div class="relative h-full w-full">
+											{#if !loadedImages.has(batch.id)}
+												<Skeleton class="absolute inset-0 h-full w-full rounded-none" />
+											{/if}
+											<img
+												src={pb.files.getUrl(batch.firstImage, batch.firstImage.image, { thumb: '300x300' })}
+												alt={t('images.gallery.batch_thumbnail')}
+												loading="lazy"
+												decoding="async"
+												onload={() => handleImageLoad(batch.id)}
+												class="h-full w-full object-cover transition-transform group-hover:scale-105 {selectedBatches.has(batch.id) ? 'opacity-60' : ''} {loadedImages.has(batch.id) ? 'opacity-100' : 'opacity-0'}"
+											/>
+										</div>
 									{/if}
 								{:else}
 									<div class="flex h-full w-full items-center justify-center">
