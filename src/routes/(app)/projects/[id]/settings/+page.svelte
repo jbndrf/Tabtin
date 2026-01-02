@@ -11,6 +11,8 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Command from '$lib/components/ui/command';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Accordion from '$lib/components/ui/accordion';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Separator } from '$lib/components/ui/separator';
 	import { t } from '$lib/i18n';
 	import * as m from '$lib/paraglide/messages';
@@ -56,7 +58,10 @@
 	let sheetOpen = $state(false);
 	let drawerOpen = $state(false);
 	let currentColumnIndex = $state(0);
-	let activeTab = $state('project');
+	let activeTab = $state('input');
+	let inputSubTab = $state('pdf');
+	let analysisSubTab = $state('llm');
+	let expectedOutputSubTab = $state('schema');
 	let modelComboboxOpen = $state(false);
 	let schemaChatOpen = $state(false);
 
@@ -206,8 +211,8 @@
 
 	// Control sheet visibility based on active tab
 	$effect(() => {
-		// Close sheet when leaving schema tab
-		if (activeTab !== 'schema') {
+		// Close sheet when leaving schema sub-tab
+		if (activeTab !== 'expected-output' || expectedOutputSubTab !== 'schema') {
 			sheetOpen = false;
 			drawerOpen = false;
 		}
@@ -559,425 +564,459 @@
 
 <div class="space-y-6 p-4">
 	<Tabs.Root bind:value={activeTab} class="w-full">
-		<Tabs.List class="grid w-full grid-cols-4">
-			<Tabs.Trigger value="project">Project</Tabs.Trigger>
-			<Tabs.Trigger value="schema">{t('project.settings.tabs.columns')}</Tabs.Trigger>
-			<Tabs.Trigger value="api">API</Tabs.Trigger>
-			<Tabs.Trigger value="processing">Processing</Tabs.Trigger>
+		<Tabs.List class="grid w-full grid-cols-3">
+			<Tabs.Trigger value="input">Input</Tabs.Trigger>
+			<Tabs.Trigger value="analysis">Analysis</Tabs.Trigger>
+			<Tabs.Trigger value="expected-output">Expected Output</Tabs.Trigger>
 		</Tabs.List>
 
-		<!-- Project Tab -->
-		<Tabs.Content value="project" class="mt-4 space-y-4">
-			<div class="space-y-4">
-				<h2 class="text-xl font-semibold">{t('project.settings.basic.title')}</h2>
+		<!-- ==================== INPUT TAB ==================== -->
+		<Tabs.Content value="input" class="mt-4 space-y-4">
+			<Tabs.Root bind:value={inputSubTab} class="w-full">
+				<Tabs.List class="w-full max-w-xs">
+					<Tabs.Trigger value="pdf" class="flex-1">PDF</Tabs.Trigger>
+					<Tabs.Trigger value="images" class="flex-1">Images</Tabs.Trigger>
+				</Tabs.List>
 
-				<div class="space-y-2">
-					<Label for="name">{t('project.settings.basic.name_label')} *</Label>
-					<Input
-						id="name"
-						bind:value={projectName}
-						placeholder={t('project.settings.basic.name_placeholder')}
-						required
-						class="h-12"
-					/>
-				</div>
+				<!-- PDF Sub-tab -->
+				<Tabs.Content value="pdf" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div class="flex items-start justify-between">
+							<div>
+								<h2 class="text-lg font-semibold">PDF Settings</h2>
+								<p class="mt-1 text-sm text-muted-foreground">
+									Configure how PDF documents are converted to images before processing.
+								</p>
+							</div>
+							<Button variant="outline" size="sm" onclick={resetPdfDefaults}>
+								Reset to Defaults
+							</Button>
+						</div>
 
-				<div class="space-y-2">
-					<Label for="description">{t('project.settings.basic.description_label')}</Label>
-					<Textarea
-						id="description"
-						bind:value={description}
-						placeholder={t('project.settings.basic.description_placeholder')}
-						rows={3}
-					/>
-				</div>
-			</div>
+						<!-- Include OCR Text -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="includeOcrText" class="cursor-pointer">Include Text Layer</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Sends embedded PDF text alongside images to help the AI read small or complex text. Disable for pure visual analysis.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="includeOcrText" bind:checked={includeOcrText} />
+						</div>
+
+						<!-- Per-Page Extraction -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="perPageExtraction" class="cursor-pointer">Page-by-Page Processing</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Process each PDF page separately with context from previous pages. More thorough but slower. Only applies to multi-page PDFs.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="perPageExtraction" bind:checked={featureFlags.perPageExtraction} />
+						</div>
+
+						<!-- Advanced Settings -->
+						<Accordion.Root type="single" collapsible class="w-full">
+							<Accordion.Item value="advanced">
+								<Accordion.Trigger class="text-sm font-medium">Advanced Settings</Accordion.Trigger>
+								<Accordion.Content>
+									<div class="space-y-4 pt-4">
+										<!-- DPI Setting -->
+										<div class="space-y-2">
+											<div class="flex items-center gap-2">
+												<Label for="pdfDpi">Resolution (DPI)</Label>
+												<Tooltip.Root>
+													<Tooltip.Trigger>
+														{#snippet child({ props })}
+															<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+																<HelpCircle class="h-4 w-4" />
+															</button>
+														{/snippet}
+													</Tooltip.Trigger>
+													<Tooltip.Content>
+														<div class="max-w-xs">
+															<p class="text-xs">Higher DPI produces sharper images. 150 for fast, 300 balanced, 600 high quality.</p>
+														</div>
+													</Tooltip.Content>
+												</Tooltip.Root>
+											</div>
+											<div class="flex gap-4 items-center">
+												<Input
+													type="number"
+													id="pdfDpi"
+													bind:value={pdfDpi}
+													min="72"
+													max="1200"
+													step="50"
+													class="h-10 w-24"
+												/>
+												<div class="flex gap-2">
+													<Button variant="outline" size="sm" onclick={() => pdfDpi = 150}>150</Button>
+													<Button variant="outline" size="sm" onclick={() => pdfDpi = 300}>300</Button>
+													<Button variant="outline" size="sm" onclick={() => pdfDpi = 600}>600</Button>
+												</div>
+											</div>
+										</div>
+
+										<!-- Format Setting -->
+										<div class="space-y-2">
+											<Label for="pdfFormat">Image Format</Label>
+											<select
+												id="pdfFormat"
+												bind:value={pdfFormat}
+												class="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm"
+											>
+												<option value="png">PNG (Lossless)</option>
+												<option value="jpeg">JPEG (Compressed)</option>
+											</select>
+										</div>
+
+										<!-- Quality Setting (only visible for JPEG) -->
+										{#if pdfFormat === 'jpeg'}
+											<div class="space-y-2">
+												<div class="flex items-center gap-2">
+													<Label for="pdfQuality">Compression Quality</Label>
+													<span class="text-sm text-muted-foreground">{pdfQuality}%</span>
+												</div>
+												<input
+													type="range"
+													id="pdfQuality"
+													bind:value={pdfQuality}
+													min="50"
+													max="100"
+													step="5"
+													class="w-full max-w-xs"
+												/>
+											</div>
+										{/if}
+
+										<!-- Max Dimensions -->
+										<div class="space-y-2">
+											<Label>Size Limits</Label>
+											<div class="grid grid-cols-2 gap-4 max-w-sm">
+												<div class="space-y-1">
+													<Label for="pdfMaxWidth" class="text-xs text-muted-foreground">Max Width (px)</Label>
+													<Input
+														type="number"
+														id="pdfMaxWidth"
+														bind:value={pdfMaxWidth}
+														min="1000"
+														max="15000"
+														step="100"
+														class="h-10"
+													/>
+												</div>
+												<div class="space-y-1">
+													<Label for="pdfMaxHeight" class="text-xs text-muted-foreground">Max Height (px)</Label>
+													<Input
+														type="number"
+														id="pdfMaxHeight"
+														bind:value={pdfMaxHeight}
+														min="1000"
+														max="15000"
+														step="100"
+														class="h-10"
+													/>
+												</div>
+											</div>
+										</div>
+									</div>
+								</Accordion.Content>
+							</Accordion.Item>
+						</Accordion.Root>
+					</div>
+				</Tabs.Content>
+
+				<!-- Images Sub-tab -->
+				<Tabs.Content value="images" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Image Settings</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure how images are processed before sending to the AI.
+							</p>
+						</div>
+
+						<!-- Image Scale Setting -->
+						<div class="space-y-2">
+							<div class="flex items-center gap-2">
+								<Label for="imageScale">Image Scale</Label>
+								<span class="text-sm text-muted-foreground">{imageScale}%</span>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Scale images before sending to AI. Lower values reduce API costs but may affect accuracy for small text.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<input
+								type="range"
+								id="imageScale"
+								bind:value={imageScale}
+								min="10"
+								max="100"
+								step="10"
+								class="w-full max-w-xs"
+							/>
+							<p class="text-xs text-muted-foreground">
+								100% = original size, 50% = half dimensions
+							</p>
+						</div>
+					</div>
+				</Tabs.Content>
+			</Tabs.Root>
 		</Tabs.Content>
 
-		<!-- Schema Tab -->
-		<Tabs.Content value="schema" class="mt-4 space-y-4">
-			<div class="space-y-4">
-				<!-- Table Preview -->
-				<div>
-					<div class="mb-3 flex items-center justify-between">
-						<h2 class="text-xl font-semibold">{t('project.settings.columns.preview_title')}</h2>
-						<Button
-							type="button"
-							variant="outline"
-							size="icon"
-							onclick={addColumn}
-							class="h-9 w-9"
-						>
-							<Plus class="h-5 w-5" />
-						</Button>
-					</div>
+		<!-- ==================== ANALYSIS TAB ==================== -->
+		<Tabs.Content value="analysis" class="mt-4 space-y-4">
+			<Tabs.Root bind:value={analysisSubTab} class="w-full">
+				<Tabs.List class="w-full max-w-md">
+					<Tabs.Trigger value="llm" class="flex-1">LLM</Tabs.Trigger>
+					<Tabs.Trigger value="request" class="flex-1">Request</Tabs.Trigger>
+					<Tabs.Trigger value="parameters" class="flex-1">Parameters</Tabs.Trigger>
+					<Tabs.Trigger value="prompts" class="flex-1">Prompts</Tabs.Trigger>
+				</Tabs.List>
 
-					{#if columns.length === 0}
-						<div class="flex items-center justify-center rounded-lg border border-dashed p-8">
-							<div class="text-center">
-								<p class="text-sm text-muted-foreground">{t('project.settings.columns.preview_empty')}</p>
-								<Button type="button" variant="outline" onclick={addColumn} class="mt-4">
-									<Plus class="mr-2 h-4 w-4" />
-									{t('project.settings.columns.add_button')}
+				<!-- LLM Selection Sub-tab -->
+				<Tabs.Content value="llm" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">LLM Selection</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure which Vision LLM to use for extraction.
+							</p>
+						</div>
+
+						<!-- Endpoint Mode Selection -->
+						<div class="space-y-2">
+							<Label>Endpoint Mode</Label>
+							<div class="flex gap-2">
+								<Button
+									variant={endpointMode === 'managed' ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => endpointMode = 'managed'}
+									disabled={managedEndpoints.length === 0}
+								>
+									Managed
+								</Button>
+								<Button
+									variant={endpointMode === 'custom' ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => endpointMode = 'custom'}
+								>
+									Custom
 								</Button>
 							</div>
-						</div>
-					{:else}
-						<div class="overflow-x-auto rounded-lg border">
-							<table class="w-full">
-								<thead class="bg-muted/50">
-									<tr>
-										{#each columns as column, i}
-											<th
-												class:border-primary={currentColumnIndex === i && (sheetOpen || drawerOpen)}
-												class={`cursor-pointer border-r px-4 py-3 text-left text-sm font-semibold transition-colors hover:bg-muted ${currentColumnIndex === i && (sheetOpen || drawerOpen) ? 'bg-primary/10' : ''}`}
-												onclick={() => openColumnEditor(i)}
-											>
-												{column.name || `Column ${i + 1}`}
-												<div class="text-xs font-normal text-muted-foreground">
-													{t(`project.settings.columns.types.${column.type}`)}
-												</div>
-											</th>
-										{/each}
-									</tr>
-								</thead>
-								<tbody>
-									<tr>
-										{#each columns as column}
-											<td class="border-r border-t px-4 py-3 text-sm text-muted-foreground italic">
-												Sample data
-											</td>
-										{/each}
-									</tr>
-								</tbody>
-							</table>
-						</div>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Schema Chat FAB -->
-			{#if !loading}
-				<Tooltip.Root>
-					<Tooltip.Trigger asChild>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								variant="default"
-								size="icon"
-								class="fixed bottom-20 right-4 md:bottom-6 md:right-6 h-14 w-14 rounded-full shadow-lg z-50"
-								onclick={() => schemaChatOpen = true}
-							>
-								<MessageSquare class="h-6 w-6" />
-							</Button>
-						{/snippet}
-					</Tooltip.Trigger>
-					<Tooltip.Content side="left">
-						<p>AI Schema Assistant</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-		</Tabs.Content>
-
-		<!-- API Tab -->
-		<Tabs.Content value="api" class="mt-4 space-y-6">
-			<!-- Connection Section -->
-			<div class="space-y-4">
-				<div>
-					<h2 class="text-xl font-semibold">{t('project.settings.vision.title')}</h2>
-					<p class="mt-1 text-sm text-muted-foreground">
-						Configure your Vision LLM API connection.
-					</p>
-				</div>
-
-				<!-- Endpoint Mode Selection -->
-				<div class="space-y-2">
-					<Label>Endpoint Mode</Label>
-					<div class="flex gap-2">
-						<Button
-							variant={endpointMode === 'managed' ? 'default' : 'outline'}
-							size="sm"
-							onclick={() => endpointMode = 'managed'}
-							disabled={managedEndpoints.length === 0}
-						>
-							Managed
-						</Button>
-						<Button
-							variant={endpointMode === 'custom' ? 'default' : 'outline'}
-							size="sm"
-							onclick={() => endpointMode = 'custom'}
-						>
-							Custom
-						</Button>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						{#if endpointMode === 'managed'}
-							Use a pre-configured endpoint managed by your administrator.
-						{:else}
-							Configure your own API endpoint and credentials.
-						{/if}
-					</p>
-				</div>
-
-				<!-- Managed Endpoint Selection -->
-				{#if endpointMode === 'managed'}
-					<div class="space-y-2">
-						<Label for="managedEndpoint">Select Endpoint</Label>
-						{#if loadingEndpoints}
-							<div class="flex items-center gap-2 text-sm text-muted-foreground">
-								<span class="animate-spin">...</span> Loading endpoints...
-							</div>
-						{:else if managedEndpoints.length === 0}
-							<div class="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-								No managed endpoints available. Contact your administrator or use a custom endpoint.
-							</div>
-						{:else}
-							<select
-								id="managedEndpoint"
-								bind:value={managedEndpointId}
-								class="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							>
-								<option value="">Select an endpoint...</option>
-								{#each managedEndpoints as ep}
-									<option value={ep.id}>
-										{ep.alias} ({ep.model_name}) - {ep.provider_type}
-									</option>
-								{/each}
-							</select>
-							{#if managedEndpointId}
-								{@const selected = managedEndpoints.find(e => e.id === managedEndpointId)}
-								{#if selected?.description}
-									<p class="text-xs text-muted-foreground">{selected.description}</p>
+							<p class="text-xs text-muted-foreground">
+								{#if endpointMode === 'managed'}
+									Use a pre-configured endpoint managed by your administrator.
+								{:else}
+									Configure your own API endpoint and credentials.
 								{/if}
-							{/if}
+							</p>
+						</div>
+
+						<!-- Managed Endpoint Selection -->
+						{#if endpointMode === 'managed'}
+							<div class="space-y-2">
+								<Label for="managedEndpoint">Select Endpoint</Label>
+								{#if loadingEndpoints}
+									<div class="flex items-center gap-2 text-sm text-muted-foreground">
+										<span class="animate-spin">...</span> Loading endpoints...
+									</div>
+								{:else if managedEndpoints.length === 0}
+									<div class="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+										No managed endpoints available. Contact your administrator or use a custom endpoint.
+									</div>
+								{:else}
+									<select
+										id="managedEndpoint"
+										bind:value={managedEndpointId}
+										class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+									>
+										<option value="">Select an endpoint...</option>
+										{#each managedEndpoints as ep}
+											<option value={ep.id}>
+												{ep.alias} ({ep.model_name}) - {ep.provider_type}
+											</option>
+										{/each}
+									</select>
+									{#if managedEndpointId}
+										{@const selected = managedEndpoints.find(e => e.id === managedEndpointId)}
+										{#if selected?.description}
+											<p class="text-xs text-muted-foreground">{selected.description}</p>
+										{/if}
+									{/if}
+								{/if}
+							</div>
 						{/if}
-					</div>
-				{/if}
 
-				<!-- Custom Endpoint Configuration -->
-				{#if endpointMode === 'custom'}
-				<div class="space-y-2">
-					<Label for="endpointPreset">{t('project.settings.vision.endpoint_preset_label')}</Label>
-					<select
-						id="endpointPreset"
-						bind:value={endpointPreset}
-						onchange={() => {
-							if (endpointPreset === 'openrouter') {
-								endpoint = 'https://openrouter.ai/api/v1/chat/completions';
-							} else if (endpointPreset === 'google') {
-								endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-							} else {
-								endpoint = '';
-							}
-							availableModels = [];
-							modelName = '';
-						}}
-						class="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<option value="openrouter">{t('project.settings.vision.endpoint_preset_openrouter')}</option>
-						<option value="google">Google Gemini API</option>
-						<option value="custom">{t('project.settings.vision.endpoint_preset_custom')}</option>
-					</select>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.vision.endpoint_preset_help')}
-					</p>
-				</div>
+						<!-- Custom Endpoint Configuration -->
+						{#if endpointMode === 'custom'}
+							<div class="space-y-2">
+								<Label for="endpointPreset">Endpoint Preset</Label>
+								<select
+									id="endpointPreset"
+									bind:value={endpointPreset}
+									onchange={() => {
+										if (endpointPreset === 'openrouter') {
+											endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+										} else if (endpointPreset === 'google') {
+											endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+										} else {
+											endpoint = '';
+										}
+										availableModels = [];
+										modelName = '';
+									}}
+									class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+								>
+									<option value="openrouter">OpenRouter</option>
+									<option value="google">Google Gemini API</option>
+									<option value="custom">Custom Endpoint</option>
+								</select>
+							</div>
 
-				<div class="space-y-2">
-					<Label for="endpoint">{t('project.settings.vision.endpoint_label')}</Label>
-					<Input
-						type="url"
-						id="endpoint"
-						bind:value={endpoint}
-						placeholder="https://api.openai.com/v1/chat/completions"
-						class="h-12"
-						disabled={endpointPreset === 'openrouter' || endpointPreset === 'google'}
-					/>
-					{#if endpointPreset === 'openrouter'}
-						<p class="text-xs text-muted-foreground">
-							{t('project.settings.vision.endpoint_openrouter_info')}
-						</p>
-					{:else if endpointPreset === 'google'}
-						<p class="text-xs text-muted-foreground">
-							Using Google's OpenAI-compatible Gemini API.
-						</p>
-					{/if}
-				</div>
+							<div class="space-y-2">
+								<Label for="endpoint">API Endpoint</Label>
+								<Input
+									type="url"
+									id="endpoint"
+									bind:value={endpoint}
+									placeholder="https://api.openai.com/v1/chat/completions"
+									class="h-10"
+									disabled={endpointPreset === 'openrouter' || endpointPreset === 'google'}
+								/>
+							</div>
 
-				<div class="space-y-2">
-					<Label for="apiKey">{t('project.settings.vision.api_key_label')}</Label>
-					<Input
-						type="password"
-						id="apiKey"
-						bind:value={apiKey}
-						placeholder="sk-... or your API key"
-						class="h-12"
-					/>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.vision.api_key_help')}
-					</p>
-				</div>
+							<div class="space-y-2">
+								<Label for="apiKey">API Key</Label>
+								<Input
+									type="password"
+									id="apiKey"
+									bind:value={apiKey}
+									placeholder="sk-... or your API key"
+									class="h-10"
+								/>
+							</div>
 
-				<div class="space-y-2">
-					<Label for="modelName">{t('project.settings.vision.model_name_label')}</Label>
-					<div class="flex flex-col gap-2 sm:flex-row">
-						<Button
-							type="button"
-							variant="outline"
-							disabled={!endpoint || fetchingModels}
-							onclick={fetchModels}
-							class="w-full whitespace-nowrap sm:w-auto"
-						>
-							{fetchingModels ? 'Fetching...' : t('project.settings.vision.fetch_models_button')}
-						</Button>
-						{#if availableModels.length > 0}
-							<Popover.Root bind:open={modelComboboxOpen}>
-								<Popover.Trigger asChild>
-									{#snippet child({ props })}
-										<Button
-											{...props}
-											variant="outline"
-											role="combobox"
-											aria-expanded={modelComboboxOpen}
-											class="w-full justify-between h-12"
-										>
-											<span class="truncate">
-												{modelName
-													? availableModels.find((m) => m.id === modelName)?.name || modelName
-													: t('project.settings.vision.model_select_placeholder')}
-											</span>
-											<ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
-										</Button>
-									{/snippet}
-								</Popover.Trigger>
-								<Popover.Content class="w-full p-0" align="start">
-									<Command.Root>
-										<Command.Input placeholder={t('project.settings.vision.model_search_placeholder')} />
-										<Command.List>
-											<Command.Empty>{t('project.settings.vision.model_not_found')}</Command.Empty>
-											<Command.Group>
-												{#each availableModels as model}
-													<Command.Item
-														value={model.id}
-														onSelect={() => {
-															modelName = model.id;
-															modelComboboxOpen = false;
-														}}
+							<div class="space-y-2">
+								<Label for="modelName">Model</Label>
+								<div class="flex flex-col gap-2 sm:flex-row">
+									<Button
+										type="button"
+										variant="outline"
+										disabled={!endpoint || fetchingModels}
+										onclick={fetchModels}
+										class="whitespace-nowrap"
+									>
+										{fetchingModels ? 'Fetching...' : 'Fetch Models'}
+									</Button>
+									{#if availableModels.length > 0}
+										<Popover.Root bind:open={modelComboboxOpen}>
+											<Popover.Trigger asChild>
+												{#snippet child({ props })}
+													<Button
+														{...props}
+														variant="outline"
+														role="combobox"
+														aria-expanded={modelComboboxOpen}
+														class="w-full justify-between h-10"
 													>
-														<Check
-															class="mr-2 h-4 w-4 {modelName === model.id ? 'opacity-100' : 'opacity-0'}"
-														/>
-														{model.name || model.id}
-													</Command.Item>
-												{/each}
-											</Command.Group>
-										</Command.List>
-									</Command.Root>
-								</Popover.Content>
-							</Popover.Root>
-						{:else}
-							<Input
-								id="modelName"
-								bind:value={modelName}
-								placeholder={t('project.settings.vision.model_name_placeholder')}
-								class="h-12"
-							/>
-						{/if}
-					</div>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.vision.model_name_help')}
-					</p>
-				</div>
-				{/if}
-			</div>
-
-			<Separator />
-
-			<!-- Performance Section -->
-			<div class="space-y-4">
-				<div>
-					<h3 class="text-lg font-semibold">Performance</h3>
-					<p class="mt-1 text-sm text-muted-foreground">
-						Configure rate limiting and request behavior.
-					</p>
-				</div>
-
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="requestsPerMinute">Requests Per Minute</Label>
-						{#if instanceLimits}
-							<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxRequestsPerMinute})</span>
-						{/if}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="font-medium">Rate Limiting</p>
-									<p class="text-xs">Maximum number of API requests allowed per minute.</p>
-									{#if requestsPerMinute > 0}
-										<p class="text-xs font-medium mt-2">Current: {requestsPerMinute} requests/min = {(60 / requestsPerMinute).toFixed(2)}s between requests</p>
+														<span class="truncate">
+															{modelName
+																? availableModels.find((m) => m.id === modelName)?.name || modelName
+																: 'Select model...'}
+														</span>
+														<ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
+													</Button>
+												{/snippet}
+											</Popover.Trigger>
+											<Popover.Content class="w-full p-0" align="start">
+												<Command.Root>
+													<Command.Input placeholder="Search models..." />
+													<Command.List>
+														<Command.Empty>No model found.</Command.Empty>
+														<Command.Group>
+															{#each availableModels as model}
+																<Command.Item
+																	value={model.id}
+																	onSelect={() => {
+																		modelName = model.id;
+																		modelComboboxOpen = false;
+																	}}
+																>
+																	<Check
+																		class="mr-2 h-4 w-4 {modelName === model.id ? 'opacity-100' : 'opacity-0'}"
+																	/>
+																	{model.name || model.id}
+																</Command.Item>
+															{/each}
+														</Command.Group>
+													</Command.List>
+												</Command.Root>
+											</Popover.Content>
+										</Popover.Root>
+									{:else}
+										<Input
+											id="modelName"
+											bind:value={modelName}
+											placeholder="e.g., gpt-4-vision-preview"
+											class="h-10"
+										/>
 									{/if}
 								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
+							</div>
+						{/if}
 					</div>
-					<Input
-						type="number"
-						id="requestsPerMinute"
-						bind:value={requestsPerMinute}
-						min="1"
-						max={instanceLimits?.maxRequestsPerMinute ?? 1000}
-						placeholder="15"
-						class="h-12"
-					/>
-				</div>
+				</Tabs.Content>
 
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="enableParallelRequests"
-								bind:checked={enableParallelRequests}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="enableParallelRequests" class="cursor-pointer">Enable Parallel Requests</Label>
+				<!-- Request Parameters Sub-tab -->
+				<Tabs.Content value="request" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Request Parameters</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure rate limiting and request behavior.
+							</p>
 						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">Linear Mode (Default)</p>
-										<p class="text-xs">Batches processed one at a time.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">Parallel Mode</p>
-										<p class="text-xs">Multiple batches processed simultaneously.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
 
-					{#if enableParallelRequests}
-						<div class="ml-6 mt-3 space-y-2">
+						<!-- Requests Per Minute -->
+						<div class="space-y-2">
 							<div class="flex items-center gap-2">
-								<Label for="maxConcurrency">Max Concurrent Requests</Label>
+								<Label for="requestsPerMinute">Requests Per Minute</Label>
 								{#if instanceLimits}
-									<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxParallelRequests})</span>
+									<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxRequestsPerMinute})</span>
 								{/if}
 								<Tooltip.Root>
 									<Tooltip.Trigger>
@@ -989,596 +1028,463 @@
 									</Tooltip.Trigger>
 									<Tooltip.Content>
 										<div class="max-w-xs">
-											<p class="text-xs">Maximum number of LLM API requests that can run simultaneously for this project.</p>
+											<p class="text-xs">Maximum number of API requests allowed per minute.</p>
 										</div>
 									</Tooltip.Content>
 								</Tooltip.Root>
 							</div>
 							<Input
 								type="number"
-								id="maxConcurrency"
-								bind:value={maxConcurrency}
+								id="requestsPerMinute"
+								bind:value={requestsPerMinute}
 								min="1"
-								max={instanceLimits?.maxParallelRequests ?? 20}
-								placeholder="3"
-								class="h-12 max-w-32"
+								max={instanceLimits?.maxRequestsPerMinute ?? 1000}
+								class="h-10 w-32"
 							/>
 						</div>
-					{/if}
-				</div>
 
-				<!-- Deterministic Mode -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="enableDeterministicMode"
-								bind:checked={enableDeterministicMode}
-								class="h-4 w-4 rounded border-input"
+						<!-- Parallel Requests -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="enableParallelRequests" class="cursor-pointer">Enable Parallel Requests</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Process multiple batches simultaneously instead of one at a time.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="enableParallelRequests" bind:checked={enableParallelRequests} />
+						</div>
+
+						{#if enableParallelRequests}
+							<div class="ml-6 space-y-2">
+								<div class="flex items-center gap-2">
+									<Label for="maxConcurrency">Max Concurrent Requests</Label>
+									{#if instanceLimits}
+										<span class="text-xs text-muted-foreground">(max: {instanceLimits.maxParallelRequests})</span>
+									{/if}
+								</div>
+								<Input
+									type="number"
+									id="maxConcurrency"
+									bind:value={maxConcurrency}
+									min="1"
+									max={instanceLimits?.maxParallelRequests ?? 20}
+									class="h-10 w-32"
+								/>
+							</div>
+						{/if}
+
+						<!-- Request Timeout -->
+						<div class="space-y-2">
+							<div class="flex items-center gap-2">
+								<Label for="requestTimeout">Request Timeout</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Maximum wait time for LLM responses. Use 15-20 min for large PDFs.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<div class="flex gap-4 items-center">
+								<Input
+									type="number"
+									id="requestTimeout"
+									bind:value={requestTimeout}
+									min="1"
+									max="30"
+									class="h-10 w-24"
+								/>
+								<div class="flex gap-2">
+									<Button variant="outline" size="sm" onclick={() => requestTimeout = 5}>5</Button>
+									<Button variant="outline" size="sm" onclick={() => requestTimeout = 10}>10</Button>
+									<Button variant="outline" size="sm" onclick={() => requestTimeout = 15}>15</Button>
+								</div>
+								<span class="text-sm text-muted-foreground">minutes</span>
+							</div>
+						</div>
+					</div>
+				</Tabs.Content>
+
+				<!-- Model Parameters Sub-tab -->
+				<Tabs.Content value="parameters" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Model Parameters</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure sampling parameters for the LLM output.
+							</p>
+						</div>
+
+						<!-- Deterministic Mode -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="enableDeterministicMode" class="cursor-pointer">Deterministic Mode</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Sends sampling parameters for reproducible outputs. Required for vLLM.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="enableDeterministicMode" bind:checked={enableDeterministicMode} />
+						</div>
+
+						{#if enableDeterministicMode}
+							<div class="grid grid-cols-2 gap-4 ml-6">
+								<div class="space-y-1">
+									<Label for="temperature" class="text-sm">Temperature</Label>
+									<Input type="number" id="temperature" bind:value={temperature} min="0" max="2" step="0.1" class="h-10" />
+								</div>
+								<div class="space-y-1">
+									<Label for="topK" class="text-sm">Top K</Label>
+									<Input type="number" id="topK" bind:value={topK} min="1" max="100" step="1" class="h-10" />
+								</div>
+								<div class="space-y-1">
+									<Label for="topP" class="text-sm">Top P</Label>
+									<Input type="number" id="topP" bind:value={topP} min="0" max="1" step="0.1" class="h-10" />
+								</div>
+								<div class="space-y-1">
+									<Label for="repetitionPenalty" class="text-sm">Repetition Penalty</Label>
+									<Input type="number" id="repetitionPenalty" bind:value={repetitionPenalty} min="1" max="2" step="0.1" class="h-10" />
+								</div>
+								<div class="space-y-1">
+									<Label for="frequencyPenalty" class="text-sm">Frequency Penalty</Label>
+									<Input type="number" id="frequencyPenalty" bind:value={frequencyPenalty} min="0" max="2" step="0.1" class="h-10" />
+								</div>
+								<div class="space-y-1">
+									<Label for="presencePenalty" class="text-sm">Presence Penalty</Label>
+									<Input type="number" id="presencePenalty" bind:value={presencePenalty} min="0" max="2" step="0.1" class="h-10" />
+								</div>
+							</div>
+						{/if}
+
+						<!-- TOON Output Format Toggle -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="toonOutput" class="cursor-pointer">Compact Format (TOON)</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Uses a space-efficient response format that reduces API costs by 40-50%. Disable if you experience parsing errors.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="toonOutput" bind:checked={featureFlags.toonOutput} />
+						</div>
+					</div>
+				</Tabs.Content>
+
+				<!-- Prompts Sub-tab -->
+				<Tabs.Content value="prompts" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Prompts</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure custom prompt templates.
+							</p>
+						</div>
+
+						<!-- Custom Prompt Template -->
+						<div class="space-y-2">
+							<Label for="promptTemplate">Extraction Prompt</Label>
+							<Textarea
+								id="promptTemplate"
+								bind:value={promptTemplate}
+								placeholder="Leave empty to use auto-generated prompt based on your schema..."
+								rows={8}
+								class="font-mono text-xs"
 							/>
-							<Label for="enableDeterministicMode" class="cursor-pointer">Deterministic Mode</Label>
+							<p class="text-xs text-muted-foreground">
+								Custom instructions sent to the AI. Leave empty for auto-generated prompt.
+							</p>
 						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs">
-									<p class="text-xs">Sends sampling parameters to the LLM for reproducible outputs. Required for vLLM which doesn't support server-side defaults.</p>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
 
-					{#if enableDeterministicMode}
-						<div class="ml-6 mt-3 grid grid-cols-2 gap-4">
-							<div class="space-y-1">
-								<Label for="temperature" class="text-sm">Temperature</Label>
-								<Input type="number" id="temperature" bind:value={temperature} min="0" max="2" step="0.1" class="h-10" />
-							</div>
-							<div class="space-y-1">
-								<Label for="topK" class="text-sm">Top K</Label>
-								<Input type="number" id="topK" bind:value={topK} min="1" max="100" step="1" class="h-10" />
-							</div>
-							<div class="space-y-1">
-								<Label for="topP" class="text-sm">Top P</Label>
-								<Input type="number" id="topP" bind:value={topP} min="0" max="1" step="0.1" class="h-10" />
-							</div>
-							<div class="space-y-1">
-								<Label for="repetitionPenalty" class="text-sm">Repetition Penalty</Label>
-								<Input type="number" id="repetitionPenalty" bind:value={repetitionPenalty} min="1" max="2" step="0.1" class="h-10" />
-							</div>
-							<div class="space-y-1">
-								<Label for="frequencyPenalty" class="text-sm">Frequency Penalty</Label>
-								<Input type="number" id="frequencyPenalty" bind:value={frequencyPenalty} min="0" max="2" step="0.1" class="h-10" />
-							</div>
-							<div class="space-y-1">
-								<Label for="presencePenalty" class="text-sm">Presence Penalty</Label>
-								<Input type="number" id="presencePenalty" bind:value={presencePenalty} min="0" max="2" step="0.1" class="h-10" />
-							</div>
+						<!-- Review Prompt Template -->
+						<div class="space-y-2">
+							<Label for="reviewPromptTemplate">Re-extraction Prompt</Label>
+							<Textarea
+								id="reviewPromptTemplate"
+								bind:value={reviewPromptTemplate}
+								placeholder="Used when re-extracting specific fields..."
+								rows={6}
+								class="font-mono text-xs"
+							/>
+							<p class="text-xs text-muted-foreground">
+								Used when re-extracting specific fields from cropped regions.
+							</p>
 						</div>
-					{/if}
-				</div>
 
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="requestTimeout">Request Timeout (minutes)</Label>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="font-medium">API Request Timeout</p>
-									<p class="text-xs">Maximum wait time for LLM API responses.</p>
-									<ul class="text-xs list-disc pl-4 mt-2">
-										<li>5 min: Fast models, small documents</li>
-										<li>10 min: Default</li>
-										<li>15-20 min: Large PDFs</li>
-									</ul>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
+						<!-- Prompt Preview -->
+						<Accordion.Root type="single" collapsible class="w-full">
+							<Accordion.Item value="preview">
+								<Accordion.Trigger class="text-sm font-medium">Generated Prompt Preview</Accordion.Trigger>
+								<Accordion.Content>
+									<div class="overflow-x-auto rounded-md bg-muted p-3 text-xs max-h-64 overflow-y-auto mt-2">
+										<pre class="whitespace-pre-wrap">{generateFullPrompt()}</pre>
+									</div>
+									<p class="mt-2 text-xs text-muted-foreground">
+										This is what the AI will see when processing images.
+									</p>
+								</Accordion.Content>
+							</Accordion.Item>
+						</Accordion.Root>
 					</div>
-					<div class="flex gap-4 items-center">
-						<Input
-							type="number"
-							id="requestTimeout"
-							bind:value={requestTimeout}
-							min="1"
-							max="30"
-							step="1"
-							class="h-12 w-32"
-						/>
-						<div class="flex gap-2">
-							<Button variant="outline" size="sm" onclick={() => requestTimeout = 5}>5</Button>
-							<Button variant="outline" size="sm" onclick={() => requestTimeout = 10}>10</Button>
-							<Button variant="outline" size="sm" onclick={() => requestTimeout = 15}>15</Button>
-							<Button variant="outline" size="sm" onclick={() => requestTimeout = 20}>20</Button>
-						</div>
-						<span class="text-sm text-muted-foreground">minutes</span>
-					</div>
-				</div>
-			</div>
+				</Tabs.Content>
+			</Tabs.Root>
 		</Tabs.Content>
 
-		<!-- Processing Tab -->
-		<Tabs.Content value="processing" class="mt-4 space-y-6">
-			<!-- Section 1: Document Input -->
-			<div class="space-y-4">
-				<div class="flex items-start justify-between">
-					<div>
-						<h2 class="text-xl font-semibold">Document Input</h2>
-						<p class="mt-1 text-sm text-muted-foreground">
-							Configure how PDF documents are converted to images before processing.
-						</p>
-					</div>
-					<Button variant="outline" size="sm" onclick={resetPdfDefaults}>
-						Reset to Defaults
-					</Button>
-				</div>
+		<!-- ==================== EXPECTED OUTPUT TAB ==================== -->
+		<Tabs.Content value="expected-output" class="mt-4 space-y-4">
+			<Tabs.Root bind:value={expectedOutputSubTab} class="w-full">
+				<Tabs.List class="w-full max-w-xs">
+					<Tabs.Trigger value="schema" class="flex-1">Schema</Tabs.Trigger>
+					<Tabs.Trigger value="features" class="flex-1">Features</Tabs.Trigger>
+				</Tabs.List>
 
-				<!-- DPI Setting -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="pdfDpi">Resolution (DPI)</Label>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="font-medium">DPI (Dots Per Inch)</p>
-									<p class="text-xs">Higher DPI produces sharper images but increases file size.</p>
-									<ul class="text-xs list-disc pl-4 mt-2">
-										<li>150: Fast, good for clear documents</li>
-										<li>300: Balanced (default)</li>
-										<li>600: High quality</li>
-									</ul>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-					<div class="flex gap-4 items-center">
-						<Input
-							type="number"
-							id="pdfDpi"
-							bind:value={pdfDpi}
-							min="72"
-							max="1200"
-							step="50"
-							class="h-12 w-32"
-						/>
-						<div class="flex gap-2">
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 150}>150</Button>
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 300}>300</Button>
-							<Button variant="outline" size="sm" onclick={() => pdfDpi = 600}>600</Button>
+				<!-- Schema Sub-tab -->
+				<Tabs.Content value="schema" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Project Schema</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Define the table structure for extracted data.
+							</p>
 						</div>
-					</div>
-				</div>
 
-				<!-- Format Setting -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<Label for="pdfFormat">Output Format</Label>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">PNG (Default)</p>
-										<p class="text-xs">Lossless. Best for text documents.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">JPEG</p>
-										<p class="text-xs">Smaller file size. May have artifacts.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-					<select
-						id="pdfFormat"
-						bind:value={pdfFormat}
-						class="flex h-12 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<option value="png">PNG (Lossless)</option>
-						<option value="jpeg">JPEG (Compressed)</option>
-					</select>
-				</div>
-
-				<!-- Quality Setting (only visible for JPEG) -->
-				{#if pdfFormat === 'jpeg'}
-					<div class="space-y-2">
-						<div class="flex items-center gap-2">
-							<Label for="pdfQuality">JPEG Quality</Label>
-							<span class="text-sm text-muted-foreground">{pdfQuality}%</span>
-						</div>
-						<input
-							type="range"
-							id="pdfQuality"
-							bind:value={pdfQuality}
-							min="50"
-							max="100"
-							step="5"
-							class="w-full max-w-xs"
-						/>
-					</div>
-				{/if}
-
-				<!-- Max Dimensions -->
-				<div class="space-y-2">
-					<Label>Maximum Dimensions</Label>
-					<div class="grid grid-cols-2 gap-4 max-w-md">
-						<div class="space-y-1">
-							<Label for="pdfMaxWidth" class="text-xs text-muted-foreground">Max Width (px)</Label>
+						<!-- Project Name -->
+						<div class="space-y-2">
+							<Label for="name">{t('project.settings.basic.name_label')} *</Label>
 							<Input
-								type="number"
-								id="pdfMaxWidth"
-								bind:value={pdfMaxWidth}
-								min="1000"
-								max="15000"
-								step="100"
-								class="h-12"
+								id="name"
+								bind:value={projectName}
+								placeholder={t('project.settings.basic.name_placeholder')}
+								required
+								class="h-10"
 							/>
 						</div>
-						<div class="space-y-1">
-							<Label for="pdfMaxHeight" class="text-xs text-muted-foreground">Max Height (px)</Label>
-							<Input
-								type="number"
-								id="pdfMaxHeight"
-								bind:value={pdfMaxHeight}
-								min="1000"
-								max="15000"
-								step="100"
-								class="h-12"
-							/>
-						</div>
-					</div>
-				</div>
 
-				<!-- Include OCR Text -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="includeOcrText"
-								bind:checked={includeOcrText}
-								class="h-4 w-4 rounded border-input"
+						<!-- Project Description -->
+						<div class="space-y-2">
+							<Label for="description">{t('project.settings.basic.description_label')}</Label>
+							<Textarea
+								id="description"
+								bind:value={description}
+								placeholder={t('project.settings.basic.description_placeholder')}
+								rows={2}
 							/>
-							<Label for="includeOcrText" class="cursor-pointer">Include OCR Text in Vision LLM Request</Label>
 						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">Enabled (Default)</p>
-										<p class="text-xs">OCR text is sent alongside images to help accuracy.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">Disabled</p>
-										<p class="text-xs">Pure visual analysis only.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-				</div>
-			</div>
 
-			<!-- Image Scale Setting -->
-			<div class="space-y-2">
-				<div class="flex items-center gap-2">
-					<Label for="imageScale">Image Scale</Label>
-					<span class="text-sm text-muted-foreground">{imageScale}%</span>
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							{#snippet child({ props })}
-								<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-									<HelpCircle class="h-4 w-4" />
-								</button>
-							{/snippet}
-						</Tooltip.Trigger>
-						<Tooltip.Content>
-							<div class="max-w-xs space-y-1">
-								<p class="font-medium">Image Scaling</p>
-								<p class="text-xs">Scale images before sending to LLM. Lower values reduce API costs but may affect accuracy.</p>
-								<ul class="text-xs list-disc pl-4 mt-2">
-									<li>100%: Original size (no scaling)</li>
-									<li>50%: Half dimensions</li>
-									<li>25%: Quarter dimensions</li>
-								</ul>
+						<!-- Table Preview -->
+						<div>
+							<div class="mb-3 flex items-center justify-between">
+								<h3 class="text-sm font-semibold">{t('project.settings.columns.preview_title')}</h3>
+								<Button
+									type="button"
+									variant="outline"
+									size="icon"
+									onclick={addColumn}
+									class="h-8 w-8"
+								>
+									<Plus class="h-4 w-4" />
+								</Button>
 							</div>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				</div>
-				<input
-					type="range"
-					id="imageScale"
-					bind:value={imageScale}
-					min="10"
-					max="100"
-					step="10"
-					class="w-full max-w-xs"
-				/>
-				<p class="text-xs text-muted-foreground">
-					Scale non-PDF images before sending to LLM. 100% = original size.
-				</p>
-			</div>
 
-			<Separator />
-
-			<!-- Section 2: Extraction Features -->
-			<div class="space-y-4">
-				<div>
-					<h3 class="text-lg font-semibold">Extraction Features</h3>
-					<p class="text-sm text-muted-foreground mb-4">Toggle which features are enabled for document extraction.</p>
-				</div>
-
-				<!-- Bounding Boxes Toggle -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="boundingBoxes"
-								bind:checked={featureFlags.boundingBoxes}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="boundingBoxes" class="cursor-pointer">Bounding Boxes</Label>
-						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="text-xs">Extract coordinate regions for each field. Required for visual highlighting and redo cropping.</p>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-				</div>
-
-				<!-- Coordinate Format (only shown when bounding boxes enabled) -->
-				{#if featureFlags.boundingBoxes}
-					<div class="space-y-2 ml-6">
-						<Label for="coordinateFormat">Coordinate Format</Label>
-						<select
-							id="coordinateFormat"
-							bind:value={selectedPreset}
-							class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-						>
-							{#each Object.values(PROMPT_PRESETS) as preset}
-								<option value={preset.id}>{preset.name} - {preset.coordinateDescription}</option>
-							{/each}
-						</select>
-					</div>
-				{/if}
-
-				<!-- Confidence Scores Toggle -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="confidenceScores"
-								bind:checked={featureFlags.confidenceScores}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="confidenceScores" class="cursor-pointer">Confidence Scores</Label>
-						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-1">
-									<p class="text-xs">Request certainty values (0.0-1.0) for quality review.</p>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-				</div>
-
-				<!-- Multi-Row Extraction Toggle -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="multiRowExtraction"
-								bind:checked={featureFlags.multiRowExtraction}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="multiRowExtraction" class="cursor-pointer">Multi-Row Extraction</Label>
-						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">Single Row (Default)</p>
-										<p class="text-xs">One item per image (product labels, business cards).</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">Multi-Row Mode</p>
-										<p class="text-xs">Multiple items per image (invoices, bank statements).</p>
+							{#if columns.length === 0}
+								<div class="flex items-center justify-center rounded-lg border border-dashed p-6">
+									<div class="text-center">
+										<p class="text-sm text-muted-foreground">{t('project.settings.columns.preview_empty')}</p>
+										<Button type="button" variant="outline" onclick={addColumn} class="mt-3">
+											<Plus class="mr-2 h-4 w-4" />
+											{t('project.settings.columns.add_button')}
+										</Button>
 									</div>
 								</div>
+							{:else}
+								<div class="overflow-x-auto rounded-lg border">
+									<table class="w-full">
+										<thead class="bg-muted/50">
+											<tr>
+												{#each columns as column, i}
+													<th
+														class:border-primary={currentColumnIndex === i && (sheetOpen || drawerOpen)}
+														class={`cursor-pointer border-r px-3 py-2 text-left text-sm font-semibold transition-colors hover:bg-muted ${currentColumnIndex === i && (sheetOpen || drawerOpen) ? 'bg-primary/10' : ''}`}
+														onclick={() => openColumnEditor(i)}
+													>
+														{column.name || `Column ${i + 1}`}
+														<div class="text-xs font-normal text-muted-foreground">
+															{t(`project.settings.columns.types.${column.type}`)}
+														</div>
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody>
+											<tr>
+												{#each columns as column}
+													<td class="border-r border-t px-3 py-2 text-sm text-muted-foreground italic">
+														Sample data
+													</td>
+												{/each}
+											</tr>
+										</tbody>
+									</table>
+								</div>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Schema Chat FAB -->
+					{#if !loading}
+						<Tooltip.Root>
+							<Tooltip.Trigger asChild>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="default"
+										size="icon"
+										class="fixed bottom-20 right-4 md:bottom-6 md:right-6 h-14 w-14 rounded-full shadow-lg z-50"
+										onclick={() => schemaChatOpen = true}
+									>
+										<MessageSquare class="h-6 w-6" />
+									</Button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content side="left">
+								<p>AI Schema Assistant</p>
 							</Tooltip.Content>
 						</Tooltip.Root>
-					</div>
-				</div>
+					{/if}
+				</Tabs.Content>
 
-				<!-- Per-Page Extraction Toggle (only shown when multi-row is enabled) -->
-				{#if featureFlags.multiRowExtraction}
-					<div class="space-y-2 ml-6">
-						<div class="flex items-center gap-2">
-							<div class="flex items-center space-x-2">
-								<input
-									type="checkbox"
-									id="perPageExtraction"
-									bind:checked={featureFlags.perPageExtraction}
-									class="h-4 w-4 rounded border-input"
-								/>
-								<Label for="perPageExtraction" class="cursor-pointer">Per-Page Extraction</Label>
+				<!-- Features Sub-tab -->
+				<Tabs.Content value="features" class="mt-4 space-y-4">
+					<div class="space-y-4">
+						<div>
+							<h2 class="text-lg font-semibold">Extraction Features</h2>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Configure what additional data is extracted alongside values.
+							</p>
+						</div>
+
+						<!-- Location Highlighting (Bounding Boxes) -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="boundingBoxes" class="cursor-pointer">Location Highlighting</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Shows where each value was found in the document. Required for visual review and corrections.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
 							</div>
-							<Tooltip.Root>
-								<Tooltip.Trigger>
-									{#snippet child({ props })}
-										<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-											<HelpCircle class="h-4 w-4" />
-										</button>
-									{/snippet}
-								</Tooltip.Trigger>
-								<Tooltip.Content>
-									<div class="max-w-xs space-y-2">
-										<div>
-											<p class="font-medium text-xs">All Pages At Once (Default)</p>
-											<p class="text-xs">Send all pages in one request. Faster but may miss items.</p>
+							<Switch id="boundingBoxes" bind:checked={featureFlags.boundingBoxes} />
+						</div>
+
+						<!-- Coordinate Format (shown when Location Highlighting enabled) -->
+						{#if featureFlags.boundingBoxes}
+							<div class="space-y-2 ml-6">
+								<Label for="coordinateFormat">Coordinate Format</Label>
+								<select
+									id="coordinateFormat"
+									bind:value={selectedPreset}
+									class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+								>
+									{#each Object.values(PROMPT_PRESETS) as preset}
+										<option value={preset.id}>{preset.name} - {preset.coordinateDescription}</option>
+									{/each}
+								</select>
+								<p class="text-xs text-muted-foreground">Match this to your vision model's expected format.</p>
+							</div>
+						{/if}
+
+						<!-- Confidence Scores -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="confidenceScores" class="cursor-pointer">Confidence Scores</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">The AI rates how certain it is about each value (0-100%). Low confidence values are highlighted for review.</p>
 										</div>
-										<div>
-											<p class="font-medium text-xs">Per-Page Mode</p>
-											<p class="text-xs">Process each page separately with context from previous pages. More thorough extraction for multi-page documents.</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="confidenceScores" bind:checked={featureFlags.confidenceScores} />
+						</div>
+
+						<!-- Multiple Items per Document -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="multiRowExtraction" class="cursor-pointer">Multiple Items per Document</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Enable for documents with tables or lists (invoices, statements). Disable for single-item documents (labels, IDs).</p>
 										</div>
-									</div>
-								</Tooltip.Content>
-							</Tooltip.Root>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="multiRowExtraction" bind:checked={featureFlags.multiRowExtraction} />
 						</div>
 					</div>
-				{/if}
-			</div>
-
-			<Separator />
-
-			<!-- Section 3: Output Format -->
-			<div class="space-y-4">
-				<div>
-					<h3 class="text-lg font-semibold">Output Format</h3>
-					<p class="text-sm text-muted-foreground mb-4">Configure output format and custom prompts.</p>
-				</div>
-
-				<!-- TOON Output Format Toggle -->
-				<div class="space-y-2">
-					<div class="flex items-center gap-2">
-						<div class="flex items-center space-x-2">
-							<input
-								type="checkbox"
-								id="toonOutput"
-								bind:checked={featureFlags.toonOutput}
-								class="h-4 w-4 rounded border-input"
-							/>
-							<Label for="toonOutput" class="cursor-pointer">TOON Output Format</Label>
-						</div>
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-										<HelpCircle class="h-4 w-4" />
-									</button>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<div class="max-w-xs space-y-2">
-									<div>
-										<p class="font-medium text-xs">JSON (Default)</p>
-										<p class="text-xs">Standard JSON output. Compatible with all models.</p>
-									</div>
-									<div>
-										<p class="font-medium text-xs">TOON Format</p>
-										<p class="text-xs">40-50% fewer tokens, faster extraction.</p>
-									</div>
-								</div>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					</div>
-				</div>
-
-				<!-- Custom Prompt Template -->
-				<div class="space-y-2">
-					<Label for="promptTemplate">{t('project.settings.prompts.template_label')}</Label>
-					<Textarea
-						id="promptTemplate"
-						bind:value={promptTemplate}
-						placeholder="Enter your custom prompt template..."
-						rows={10}
-						class="font-mono text-xs"
-					/>
-					<p class="text-xs text-muted-foreground">
-						{t('project.settings.prompts.template_help')}
-					</p>
-				</div>
-
-				<!-- Review Prompt Template -->
-				<div class="space-y-2">
-					<Label for="reviewPromptTemplate">Review Prompt Template (for redo)</Label>
-					<Textarea
-						id="reviewPromptTemplate"
-						bind:value={reviewPromptTemplate}
-						placeholder="Enter your custom review prompt template..."
-						rows={10}
-						class="font-mono text-xs"
-					/>
-					<p class="text-xs text-muted-foreground">
-						Used when re-extracting specific fields.
-					</p>
-				</div>
-
-				<!-- Prompt Preview -->
-				<div>
-					<h4 class="mb-2 text-sm font-semibold">
-						{t('project.settings.prompts.preview_title')}
-					</h4>
-					<div class="overflow-x-auto rounded-md bg-muted p-3 text-xs max-h-64 overflow-y-auto">
-						<pre class="whitespace-pre-wrap">{generateFullPrompt()}</pre>
-					</div>
-					<p class="mt-2 text-xs text-muted-foreground">
-						This is what the AI will see when processing images
-					</p>
-				</div>
-			</div>
+				</Tabs.Content>
+			</Tabs.Root>
 		</Tabs.Content>
 	</Tabs.Root>
 </div>

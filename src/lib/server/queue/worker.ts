@@ -805,8 +805,13 @@ export class QueueWorker {
 		let managedEndpointId: string | null = null;
 
 		try {
+			console.log(`[Redo] Starting redo for batch=${batchId}, project=${projectId}, rowIndex=${rowIndex}`);
+			console.log(`[Redo] redoColumnIds:`, redoColumnIds);
+			console.log(`[Redo] croppedImageIds:`, croppedImageIds);
+
 			// Load project and batch
 			const project = await this.pb.collection('projects').getOne(projectId);
+			console.log(`[Redo] Loaded project: ${project.id}`);
 			const settings = project.settings;
 
 			// Resolve endpoint settings (managed vs custom)
@@ -830,11 +835,29 @@ export class QueueWorker {
 			const batch = await this.pb.collection('image_batches').getOne(batchId, {
 				expand: 'images'
 			});
+			console.log(`[Redo] Loaded batch: ${batch.id}`);
 
 			// NEW: Load the specific row to redo
-			const existingRow = await this.pb.collection('extraction_rows').getFirstListItem(
-				`batch ~ "${batchId}" && row_index = ${rowIndex}`
-			);
+			// Note: batch is a multi-relation field, so use ~ (contains) instead of =
+			console.log(`[Redo] Looking for extraction_row: batch="${batchId}", row_index=${rowIndex}`);
+			let existingRow;
+			try {
+				// First, let's see ALL extraction_rows for this batch
+				const allRows = await this.pb.collection('extraction_rows').getFullList({
+					filter: `batch ~ "${batchId}"`
+				});
+				console.log(`[Redo] Found ${allRows.length} extraction_rows for batch ${batchId}:`);
+				allRows.forEach((r: any) => console.log(`[Redo]   - id=${r.id}, row_index=${r.row_index}, status=${r.status}`));
+
+				existingRow = await this.pb.collection('extraction_rows').getFirstListItem(
+					`batch ~ "${batchId}" && row_index = ${rowIndex}`
+				);
+				console.log(`[Redo] Found extraction_row: ${existingRow.id}`);
+			} catch (queryErr: any) {
+				console.error(`[Redo] Query failed:`, queryErr.message);
+				console.error(`[Redo] Query filter was: batch ~ "${batchId}" && row_index = ${rowIndex}`);
+				throw queryErr;
+			}
 
 			// Separate correct and redo extractions for THIS ROW only
 			const allExtractions = existingRow.row_data as any[];
@@ -844,15 +867,27 @@ export class QueueWorker {
 			const redoColumns = settings.columns.filter((c: any) => redoColumnIds.includes(c.id));
 
 			console.log(`Processing redo for batch ${batchId}, row ${rowIndex}, columns:`, redoColumnIds);
+			console.log(`[Redo] croppedImageIds mapping:`, JSON.stringify(croppedImageIds));
 
 			// Create a mapping from LLM image_index (0, 1, 2...) to the actual cropped image ID
 			const imageIndexToCroppedId: string[] = [];
 			for (const columnId of redoColumnIds) {
 				const imageId = croppedImageIds[columnId];
+				console.log(`[Redo] Processing column ${columnId}, imageId: ${imageId}`);
 				if (!imageId) {
 					throw new Error(`No cropped image found for column ${columnId}`);
 				}
-				const img = await this.pb.collection('images').getOne(imageId);
+
+				let img;
+				try {
+					img = await this.pb.collection('images').getOne(imageId);
+					console.log(`[Redo] Found image record: ${img.id}, file: ${img.image}`);
+				} catch (fetchError: any) {
+					console.error(`[Redo] Failed to fetch image ${imageId}:`, fetchError.message);
+					console.error(`[Redo] Full error:`, JSON.stringify(fetchError, null, 2));
+					throw fetchError;
+				}
+
 				const url = this.pb.files.getURL(img, img.image);
 				const response = await fetch(url);
 				const blob = await response.blob();

@@ -58,6 +58,19 @@ export const POST: RequestHandler = async ({ request }) => {
 						await deleteBatch.send();
 					}
 
+					// Delete cropped images (from redo operations) for this batch
+					const croppedImages = await pb.collection('images').getFullList({
+						filter: `batch = '${batchId}' && is_cropped = true`
+					});
+
+					if (croppedImages.length > 0) {
+						const deleteImagesBatch = pb.createBatch();
+						for (const img of croppedImages) {
+							deleteImagesBatch.collection('images').delete(img.id);
+						}
+						await deleteImagesBatch.send();
+					}
+
 					// Update batch status and clear data
 					await pb.collection('image_batches').update(batchId, {
 						status: targetStatus,

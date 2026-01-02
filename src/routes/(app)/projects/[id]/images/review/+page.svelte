@@ -9,6 +9,7 @@
 	import { Check, X, ZoomIn, ZoomOut, Maximize2, MoreVertical, Search, MapPin, Edit, Settings, Trash2, Crop, RotateCcw, FileText } from 'lucide-svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { ImageBatchesResponse, ImagesResponse, ProjectsResponse } from '$lib/pocketbase-types';
@@ -98,6 +99,16 @@
 
 	// Card swipe-to-discard state
 	let cardSwipeState = $state<Record<string, { offsetX: number; offsetY: number; isDragging: boolean; startX: number; startY: number; isAnimating: boolean; isHorizontalSwipe: boolean }>>({});
+
+	// Delete confirmation state
+	let pendingDeleteColumnId = $state<string | null>(null);
+	let showDeleteConfirm = $state(false);
+
+	// Double-tap state for cards (key is "columnId-side")
+	let lastTapTime = $state<Record<string, number>>({});
+
+	// Focused column state - when zoomed to a specific region, only show that bbox
+	let focusedColumnId = $state<string | null>(null);
 
 	// Redo state - track which columns are marked for redo
 	let redoColumns = $state<Set<string>>(new Set());
@@ -510,7 +521,7 @@
 		return null;
 	}
 
-	function getColumnValue(columnId: string): { value: string | null; confidence?: number; redone?: boolean } | null {
+	function getColumnValue(columnId: string): { value: string | null; confidence?: number; redone?: boolean; bbox_2d?: [number, number, number, number]; image_index?: number } | null {
 		const allExtractions = getAllExtractions();
 		const column = columns.find(c => c.id === columnId);
 		// Match by column_id first, then fall back to column_name if LLM used different ID format
@@ -518,7 +529,7 @@
 			e.column_id === columnId ||
 			(column && e.column_name === column.name)
 		);
-		return extraction ? { value: extraction.value, confidence: extraction.confidence, redone: extraction.redone } : null;
+		return extraction ? { value: extraction.value, confidence: extraction.confidence, redone: extraction.redone, bbox_2d: extraction.bbox_2d, image_index: extraction.image_index } : null;
 	}
 
 	function renderAllCanvases() {
@@ -632,9 +643,12 @@
 
 		// Draw bounding boxes for this specific image (excluding redo columns)
 		// Use getActualColumnId to handle LLM using different column_id formats
+		// If focusedColumnId is set, only show that column's bbox
 		const extractions = getAllExtractions().filter(e => {
 			if (e.image_index !== imageIdx) return false;
 			const actualColId = getActualColumnId(e);
+			// If focused on a specific column, only show that one
+			if (focusedColumnId && actualColId !== focusedColumnId) return false;
 			return actualColId ? !redoColumns.has(actualColId) : true;
 		});
 		extractions.forEach((extraction) => {
@@ -691,11 +705,15 @@
 		});
 
 		// Draw custom bounding boxes for redo columns on this image
+		// Skip if focused on a different column
 		const currentVImage = expandedImages[imageIdx];
 
 		Object.entries(customBoundingBoxes).forEach(([columnId, box]) => {
 			// Only draw if this box is for the current image (compare by ID)
 			if (!currentVImage || box.imageId !== currentVImage.id) return;
+
+			// If focused on a specific column, only show that one
+			if (focusedColumnId && columnId !== focusedColumnId) return;
 
 			const column = columns.find(c => c.id === columnId);
 			if (!column) return;
@@ -1235,6 +1253,7 @@
 		zoomLevels[currentImageIndex] = 1;
 		panX[currentImageIndex] = 0;
 		panY[currentImageIndex] = 0;
+		focusedColumnId = null; // Clear focused column to show all bboxes
 		renderCanvas(currentImageIndex);
 	}
 
@@ -1300,6 +1319,9 @@
 			currentImageIndex = imageIdx;
 		}
 
+		// Set focused column to only show this bbox
+		focusedColumnId = columnId;
+
 		// Render the canvas
 		setTimeout(() => renderCanvas(imageIdx), 50);
 	}
@@ -1320,36 +1342,31 @@
 	}
 
 	async function handleSaveField(columnId: string) {
-		const batch = getCurrentBatch();
-		if (!batch) return;
+		const row = getCurrentRow();
+		if (!row) return;
 
 		try {
-			// Update the processed_data with the new value for this specific field
-			const updatedExtractions = getAllExtractions().map(extraction => {
+			// Update the extraction_rows with the new value for this specific field
+			const updatedRowData = getAllExtractions().map(extraction => {
 				if (extraction.column_id === columnId) {
 					return { ...extraction, value: editedValues[columnId] || null };
 				}
 				return extraction;
 			});
 
-			const processedData = batch.processed_data && typeof batch.processed_data === 'object'
-				? { ...batch.processed_data, extractions: updatedExtractions }
-				: { extractions: updatedExtractions };
-
-			await pb.collection('image_batches').update(batch.id, {
-				processed_data: processedData
+			await pb.collection('extraction_rows').update(row.id, {
+				row_data: updatedRowData
 			});
 
 			toast.success(t('images.review.toast.saved'));
+
+			// Update local state immediately
+			extractionRows[currentRowIndex] = { ...row, row_data: updatedRowData };
 
 			// Remove from editing fields
 			editingFields.delete(columnId);
 			delete editedValues[columnId];
 			editingFields = new Set(editingFields);
-
-			// Reload the batch data
-			const updatedBatch = await pb.collection('image_batches').getOne<ImageBatchesResponse>(batch.id);
-			batches[currentBatchIndex] = { ...batches[currentBatchIndex], ...updatedBatch };
 		} catch (error) {
 			console.error('Failed to save edits:', error);
 			toast.error(t('images.review.toast.failed_to_save'));
@@ -1422,7 +1439,7 @@
 
 		// Only process swipe if it was confirmed as horizontal
 		if (cardSwipeState[columnId].isHorizontalSwipe) {
-			const threshold = 120;
+			const threshold = 160;
 			const offsetX = cardSwipeState[columnId].offsetX;
 
 			if (Math.abs(offsetX) > threshold) {
@@ -1450,11 +1467,10 @@
 		const batch = getCurrentBatch();
 		if (!batch) return;
 
-		// Animate card flying away to the left
+		// Reset card position and show confirmation dialog
 		cardSwipeState[columnId].isAnimating = true;
-		const targetX = -500;
 		const startOffset = cardSwipeState[columnId].offsetX;
-		const duration = 200;
+		const duration = 150;
 		const startTime = Date.now();
 
 		const animate = () => {
@@ -1462,17 +1478,77 @@
 			const progress = Math.min(elapsed / duration, 1);
 			const easeOut = 1 - Math.pow(1 - progress, 3);
 
-			cardSwipeState[columnId].offsetX = startOffset + (targetX - startOffset) * easeOut;
+			cardSwipeState[columnId].offsetX = startOffset * (1 - easeOut);
 
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
-				// Clear the field value
-				clearCardContent(columnId);
+				// Reset state and show confirmation
+				cardSwipeState[columnId].offsetX = 0;
+				cardSwipeState[columnId].isAnimating = false;
+				cardSwipeState[columnId].isHorizontalSwipe = false;
+
+				pendingDeleteColumnId = columnId;
+				showDeleteConfirm = true;
 			}
 		};
 
 		animate();
+	}
+
+	function confirmDelete() {
+		if (pendingDeleteColumnId) {
+			clearCardContent(pendingDeleteColumnId);
+		}
+		showDeleteConfirm = false;
+		pendingDeleteColumnId = null;
+	}
+
+	function cancelDelete() {
+		showDeleteConfirm = false;
+		pendingDeleteColumnId = null;
+	}
+
+	// Track last tap timestamp to prevent onclick firing after ontouchend
+	let lastTouchEndTime = $state(0);
+
+	function handleCardDoubleTap(e: TouchEvent | MouseEvent, columnId: string, side: 'left' | 'right') {
+		const now = Date.now();
+		const doubleTapDelay = 300; // ms
+
+		// Prevent onclick from firing right after ontouchend (they both fire on mobile)
+		if ('touches' in e) {
+			// This is a touch event
+			lastTouchEndTime = now;
+		} else {
+			// This is a mouse/click event - ignore if it came right after touch
+			if (now - lastTouchEndTime < 50) {
+				return;
+			}
+		}
+
+		const key = `${columnId}-${side}`;
+		if (lastTapTime[key] && now - lastTapTime[key] < doubleTapDelay) {
+			// Double tap detected on same side
+			e.preventDefault();
+			e.stopPropagation();
+
+			if (side === 'left') {
+				// Double tap on left half - enable edit mode
+				if (!editingFields.has(columnId)) {
+					toggleEditField(columnId);
+				}
+			} else {
+				// Double tap on right half - zoom to region
+				handleZoomToRegion(columnId);
+			}
+
+			// Reset tap tracking
+			lastTapTime[key] = 0;
+		} else {
+			// First tap - record time
+			lastTapTime[key] = now;
+		}
 	}
 
 	async function handleCardSwipeRedo(columnId: string) {
@@ -1687,31 +1763,26 @@
 	}
 
 	async function clearCardContent(columnId: string) {
-		const batch = getCurrentBatch();
-		if (!batch) return;
+		const row = getCurrentRow();
+		if (!row) return;
 
 		try {
-			// Update the processed_data with null value for this field
-			const updatedExtractions = getAllExtractions().map(extraction => {
+			// Update the extraction_rows with null value for this field
+			const updatedRowData = getAllExtractions().map(extraction => {
 				if (extraction.column_id === columnId) {
 					return { ...extraction, value: null };
 				}
 				return extraction;
 			});
 
-			const processedData = batch.processed_data && typeof batch.processed_data === 'object'
-				? { ...batch.processed_data, extractions: updatedExtractions }
-				: { extractions: updatedExtractions };
-
-			await pb.collection('image_batches').update(batch.id, {
-				processed_data: processedData
+			await pb.collection('extraction_rows').update(row.id, {
+				row_data: updatedRowData
 			});
 
 			toast.success(t('images.review.toast.content_cleared'));
 
-			// Reload the batch data
-			const updatedBatch = await pb.collection('image_batches').getOne<ImageBatchesResponse>(batch.id);
-			batches[currentBatchIndex] = { ...batches[currentBatchIndex], ...updatedBatch };
+			// Update local state immediately
+			extractionRows[currentRowIndex] = { ...row, row_data: updatedRowData };
 
 			// Reset card state
 			cardSwipeState[columnId].offsetX = 0;
@@ -1829,8 +1900,17 @@
 
 				const croppedImageRecord = await pb.collection('images').create(formData);
 
+				// Verify the image was created successfully
+				try {
+					const verifyImage = await pb.collection('images').getOne(croppedImageRecord.id);
+					console.log('Verified cropped image exists:', verifyImage.id, 'file:', verifyImage.image);
+				} catch (verifyErr) {
+					console.error('Image verification failed immediately after create:', verifyErr);
+					throw new Error(`Failed to verify cropped image ${croppedImageRecord.id} exists`);
+				}
+
 				croppedImageIds[columnId] = croppedImageRecord.id;
-				sourceImageIds[columnId] = vImage.originalImage.id; // Store the source image ID
+				sourceImageIds[columnId] = vImage.originalImage.id;
 
 				console.log('Uploaded cropped image for column:', columnId, {
 					imageId: croppedImageRecord.id,
@@ -1842,6 +1922,7 @@
 			}
 
 			console.log('Uploaded', Object.keys(croppedImageIds).length, 'cropped images');
+			console.log('croppedImageIds mapping:', JSON.stringify(croppedImageIds));
 			toast.info('Adding redo processing to queue...');
 
 			// Call the queue redo endpoint with cropped image IDs and source image IDs
@@ -1853,9 +1934,10 @@
 				body: JSON.stringify({
 					batchId: batch.id,
 					projectId: data.projectId,
+					rowIndex: getCurrentRow()?.row_index ?? currentRowIndex,
 					redoColumnIds: Array.from(redoColumns),
 					croppedImageIds,
-					sourceImageIds, // Pass the source image IDs for proper bbox mapping
+					sourceImageIds,
 					priority: 5
 				})
 			});
@@ -2446,9 +2528,27 @@
 													</p>
 												{/if}
 											{:else}
-												<p class="text-sm leading-relaxed {extracted?.value ? 'text-foreground font-medium' : 'text-muted-foreground italic'}">
-													{extracted?.value || 'Not extracted'}
-												</p>
+												<!-- svelte-ignore a11y_no_static_element_interactions -->
+												<div class="flex min-h-[2rem] select-none">
+													<!-- Left half - double tap to edit -->
+													<div
+														class="flex-1 flex items-center cursor-pointer text-sm leading-relaxed {extracted?.value ? 'text-foreground font-medium' : 'text-muted-foreground italic'}"
+														onclick={(e) => handleCardDoubleTap(e, column.id, 'left')}
+														ontouchend={(e) => handleCardDoubleTap(e, column.id, 'left')}
+													>
+														{extracted?.value || 'Not extracted'}
+													</div>
+													<!-- Right half - double tap to zoom -->
+													<div
+														class="flex-1 flex items-center justify-end cursor-pointer"
+														onclick={(e) => handleCardDoubleTap(e, column.id, 'right')}
+														ontouchend={(e) => handleCardDoubleTap(e, column.id, 'right')}
+													>
+														{#if extracted?.bbox_2d}
+															<MapPin class="h-4 w-4 text-muted-foreground/50" />
+														{/if}
+													</div>
+												</div>
 											{/if}
 										</div>
 									{/each}
@@ -2460,4 +2560,22 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Delete confirmation dialog -->
+	<AlertDialog.Root bind:open={showDeleteConfirm}>
+		<AlertDialog.Content>
+			<AlertDialog.Header>
+				<AlertDialog.Title>Clear content?</AlertDialog.Title>
+				<AlertDialog.Description>
+					This will remove the extracted value for this field. This action cannot be undone.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel onclick={cancelDelete}>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action onclick={confirmDelete} class="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+					Clear
+				</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Root>
 {/if}

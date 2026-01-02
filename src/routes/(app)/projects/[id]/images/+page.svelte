@@ -622,7 +622,7 @@
 						<h1 class="text-lg font-semibold md:text-xl">{t('images.gallery.title')}</h1>
 						<p class="text-sm text-muted-foreground">{$currentProject.name}</p>
 					</div>
-					<div class="flex gap-2">
+					<div class="flex flex-wrap gap-2">
 						<Button
 							variant="outline"
 							size="sm"
