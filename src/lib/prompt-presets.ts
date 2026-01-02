@@ -72,11 +72,18 @@ DOS:
 - DO output in TOON format with TAB character (\\t) as delimiter
 - DO match the field count in header exactly
 - DO use 2-space indentation for each row
+- DO wrap values containing special characters (commas, tabs, quotes) in double quotes
+- DO escape double quotes inside quoted values with backslash: " becomes \\"
 
 DONTS:
-- DO NOT use JSON, markdown, or any other format
+- DO NOT use JSON for the overall output structure (use TOON)
 - DO NOT use spaces or commas as value delimiters
-- DO NOT add any text outside the TOON structure`;
+- DO NOT add any text outside the TOON structure
+
+IMPORTANT - JSON VALUES:
+If a column description requests JSON output for a field value, output it as a quoted escaped string.
+Example: {"key": "val"} becomes "{\\"key\\": \\"val\\"}"
+This ensures JSON values parse correctly within TOON format.`;
 
 const RULES_JSON_OUTPUT = `
 OUTPUT FORMAT: JSON

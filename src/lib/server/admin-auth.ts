@@ -338,5 +338,438 @@ export async function checkProjectProcessingLimits(
 		console.warn(`[PreEnqueue] Could not check project ${projectId} limits:`, e.message);
 	}
 
+	// 3. Check user-specific limits
+	try {
+		const project = await pb.collection('projects').getOne(projectId);
+		const userId = project.owner;
+
+		if (userId) {
+			const userLimitsCheck = await checkUserProcessingLimits(userId, instanceLimits);
+			if (!userLimitsCheck.allowed) {
+				return userLimitsCheck;
+			}
+
+			// Check user endpoint limits if using managed endpoint
+			const settings = project.settings || {};
+			if (settings.endpoint_mode === 'managed' && settings.managed_endpoint_id) {
+				const userEndpointCheck = await checkUserEndpointLimits(userId, settings.managed_endpoint_id);
+				if (!userEndpointCheck.allowed) {
+					return userEndpointCheck;
+				}
+			}
+		}
+	} catch (e: any) {
+		// Continue if user limit check fails - instance limits still apply
+		console.warn(`[PreEnqueue] Could not check user limits for project ${projectId}:`, e.message);
+	}
+
+	return { allowed: true };
+}
+
+// ============================================================================
+// User Limits
+// ============================================================================
+
+export interface UserLimits {
+	id: string;
+	user: string;
+	max_concurrent_projects: number | null;
+	max_parallel_requests: number | null;
+	max_requests_per_minute: number | null;
+}
+
+export interface UserEndpointLimit {
+	id: string;
+	user: string;
+	endpoint: string;
+	max_input_tokens_per_day: number | null;
+	max_output_tokens_per_day: number | null;
+}
+
+export interface EffectiveUserLimits {
+	maxConcurrentProjects: number;
+	maxParallelRequests: number;
+	maxRequestsPerMinute: number;
+}
+
+/**
+ * Get user limits from database
+ * Returns null if no limits are set (user has unlimited access up to instance limits)
+ */
+export async function getUserLimits(userId: string): Promise<UserLimits | null> {
+	try {
+		const pb = await getAdminPb();
+		const limits = await pb.collection('user_limits').getFirstListItem(
+			`user = "${userId}"`
+		);
+		return {
+			id: limits.id,
+			user: limits.user,
+			max_concurrent_projects: limits.max_concurrent_projects,
+			max_parallel_requests: limits.max_parallel_requests,
+			max_requests_per_minute: limits.max_requests_per_minute
+		};
+	} catch (e: any) {
+		if (e.status === 404) {
+			return null;
+		}
+		throw e;
+	}
+}
+
+/**
+ * Get or create user limits record
+ */
+export async function upsertUserLimits(
+	userId: string,
+	limits: Partial<Omit<UserLimits, 'id' | 'user'>>
+): Promise<UserLimits> {
+	const pb = await getAdminPb();
+
+	try {
+		const existing = await pb.collection('user_limits').getFirstListItem(
+			`user = "${userId}"`
+		);
+		const updated = await pb.collection('user_limits').update(existing.id, limits);
+		return {
+			id: updated.id,
+			user: updated.user,
+			max_concurrent_projects: updated.max_concurrent_projects,
+			max_parallel_requests: updated.max_parallel_requests,
+			max_requests_per_minute: updated.max_requests_per_minute
+		};
+	} catch (e: any) {
+		if (e.status === 404) {
+			const created = await pb.collection('user_limits').create({
+				user: userId,
+				...limits
+			});
+			return {
+				id: created.id,
+				user: created.user,
+				max_concurrent_projects: created.max_concurrent_projects,
+				max_parallel_requests: created.max_parallel_requests,
+				max_requests_per_minute: created.max_requests_per_minute
+			};
+		}
+		throw e;
+	}
+}
+
+/**
+ * Delete user limits record (restores unlimited access)
+ */
+export async function deleteUserLimits(userId: string): Promise<boolean> {
+	try {
+		const pb = await getAdminPb();
+		const existing = await pb.collection('user_limits').getFirstListItem(
+			`user = "${userId}"`
+		);
+		await pb.collection('user_limits').delete(existing.id);
+		return true;
+	} catch (e: any) {
+		if (e.status === 404) {
+			return false;
+		}
+		throw e;
+	}
+}
+
+/**
+ * Get effective limits for a user (min of instance and user limits)
+ * null user limit = unlimited (uses instance limit)
+ */
+export async function getEffectiveUserLimits(userId: string): Promise<EffectiveUserLimits> {
+	const { getInstanceLimits } = await import('./instance-config');
+	const instanceLimits = getInstanceLimits();
+	const userLimits = await getUserLimits(userId);
+
+	return {
+		maxConcurrentProjects: userLimits?.max_concurrent_projects != null
+			? Math.min(userLimits.max_concurrent_projects, instanceLimits.maxConcurrentProjects)
+			: instanceLimits.maxConcurrentProjects,
+		maxParallelRequests: userLimits?.max_parallel_requests != null
+			? Math.min(userLimits.max_parallel_requests, instanceLimits.maxParallelRequests)
+			: instanceLimits.maxParallelRequests,
+		maxRequestsPerMinute: userLimits?.max_requests_per_minute != null
+			? Math.min(userLimits.max_requests_per_minute, instanceLimits.maxRequestsPerMinute)
+			: instanceLimits.maxRequestsPerMinute
+	};
+}
+
+/**
+ * Check user's processing limits (concurrent projects)
+ */
+async function checkUserProcessingLimits(
+	userId: string,
+	instanceLimits: { maxConcurrentProjects: number }
+): Promise<{ allowed: boolean; reason?: string }> {
+	const userLimits = await getUserLimits(userId);
+
+	// If no user limits set, they're unlimited (up to instance limits)
+	if (!userLimits || userLimits.max_concurrent_projects == null) {
+		return { allowed: true };
+	}
+
+	const pb = await getAdminPb();
+
+	// Get user's active projects count
+	const activeJobs = await pb.collection('queue_jobs').getFullList({
+		filter: 'status = "processing"',
+		fields: 'projectId'
+	});
+
+	// Get projects owned by this user
+	const userProjects = await pb.collection('projects').getFullList({
+		filter: `owner = "${userId}"`,
+		fields: 'id'
+	});
+	const userProjectIds = new Set(userProjects.map(p => p.id));
+
+	// Count active jobs for user's projects
+	const userActiveProjectIds = new Set(
+		activeJobs
+			.filter(j => userProjectIds.has(j.projectId))
+			.map(j => j.projectId)
+	);
+
+	const effectiveLimit = Math.min(userLimits.max_concurrent_projects, instanceLimits.maxConcurrentProjects);
+
+	if (userActiveProjectIds.size >= effectiveLimit) {
+		return {
+			allowed: false,
+			reason: 'You have reached your processing limit. Contact admin.'
+		};
+	}
+
+	return { allowed: true };
+}
+
+// ============================================================================
+// User Endpoint Limits
+// ============================================================================
+
+/**
+ * Get user's endpoint-specific limit
+ */
+export async function getUserEndpointLimit(
+	userId: string,
+	endpointId: string
+): Promise<UserEndpointLimit | null> {
+	try {
+		const pb = await getAdminPb();
+		const limit = await pb.collection('user_endpoint_limits').getFirstListItem(
+			`user = "${userId}" && endpoint = "${endpointId}"`
+		);
+		return {
+			id: limit.id,
+			user: limit.user,
+			endpoint: limit.endpoint,
+			max_input_tokens_per_day: limit.max_input_tokens_per_day,
+			max_output_tokens_per_day: limit.max_output_tokens_per_day
+		};
+	} catch (e: any) {
+		if (e.status === 404) {
+			return null;
+		}
+		throw e;
+	}
+}
+
+/**
+ * Get all endpoint limits for a user
+ */
+export async function getUserEndpointLimits(userId: string): Promise<UserEndpointLimit[]> {
+	try {
+		const pb = await getAdminPb();
+		const limits = await pb.collection('user_endpoint_limits').getFullList({
+			filter: `user = "${userId}"`
+		});
+		return limits.map(limit => ({
+			id: limit.id,
+			user: limit.user,
+			endpoint: limit.endpoint,
+			max_input_tokens_per_day: limit.max_input_tokens_per_day,
+			max_output_tokens_per_day: limit.max_output_tokens_per_day
+		}));
+	} catch (e: any) {
+		return [];
+	}
+}
+
+/**
+ * Upsert user endpoint limit
+ */
+export async function upsertUserEndpointLimit(
+	userId: string,
+	endpointId: string,
+	limits: { max_input_tokens_per_day?: number | null; max_output_tokens_per_day?: number | null }
+): Promise<UserEndpointLimit> {
+	const pb = await getAdminPb();
+
+	try {
+		const existing = await pb.collection('user_endpoint_limits').getFirstListItem(
+			`user = "${userId}" && endpoint = "${endpointId}"`
+		);
+		const updated = await pb.collection('user_endpoint_limits').update(existing.id, limits);
+		return {
+			id: updated.id,
+			user: updated.user,
+			endpoint: updated.endpoint,
+			max_input_tokens_per_day: updated.max_input_tokens_per_day,
+			max_output_tokens_per_day: updated.max_output_tokens_per_day
+		};
+	} catch (e: any) {
+		if (e.status === 404) {
+			const created = await pb.collection('user_endpoint_limits').create({
+				user: userId,
+				endpoint: endpointId,
+				...limits
+			});
+			return {
+				id: created.id,
+				user: created.user,
+				endpoint: created.endpoint,
+				max_input_tokens_per_day: created.max_input_tokens_per_day,
+				max_output_tokens_per_day: created.max_output_tokens_per_day
+			};
+		}
+		throw e;
+	}
+}
+
+/**
+ * Delete user endpoint limit
+ */
+export async function deleteUserEndpointLimit(userId: string, endpointId: string): Promise<boolean> {
+	try {
+		const pb = await getAdminPb();
+		const existing = await pb.collection('user_endpoint_limits').getFirstListItem(
+			`user = "${userId}" && endpoint = "${endpointId}"`
+		);
+		await pb.collection('user_endpoint_limits').delete(existing.id);
+		return true;
+	} catch (e: any) {
+		if (e.status === 404) {
+			return false;
+		}
+		throw e;
+	}
+}
+
+// ============================================================================
+// User Endpoint Usage Tracking
+// ============================================================================
+
+/**
+ * Get user's endpoint usage for today
+ */
+export async function getUserEndpointUsageToday(
+	userId: string,
+	endpointId: string
+): Promise<EndpointUsage> {
+	const pb = await getAdminPb();
+	const today = getTodayISO();
+
+	try {
+		const usage = await pb.collection('user_endpoint_usage').getFirstListItem(
+			`user = "${userId}" && endpoint = "${endpointId}" && date ~ "${today}"`
+		);
+		return {
+			input_tokens_used: usage.input_tokens_used || 0,
+			output_tokens_used: usage.output_tokens_used || 0,
+			request_count: usage.request_count || 0
+		};
+	} catch (e: any) {
+		if (e.status === 404) {
+			return {
+				input_tokens_used: 0,
+				output_tokens_used: 0,
+				request_count: 0
+			};
+		}
+		throw e;
+	}
+}
+
+/**
+ * Update user endpoint usage for today (upsert)
+ */
+export async function updateUserEndpointUsage(
+	userId: string,
+	endpointId: string,
+	inputTokens: number,
+	outputTokens: number
+): Promise<void> {
+	const pb = await getAdminPb();
+	const today = getTodayISO();
+	const todayTimestamp = today + ' 00:00:00.000Z';
+
+	try {
+		const existing = await pb.collection('user_endpoint_usage').getFirstListItem(
+			`user = "${userId}" && endpoint = "${endpointId}" && date ~ "${today}"`
+		);
+
+		await pb.collection('user_endpoint_usage').update(existing.id, {
+			input_tokens_used: (existing.input_tokens_used || 0) + inputTokens,
+			output_tokens_used: (existing.output_tokens_used || 0) + outputTokens,
+			request_count: (existing.request_count || 0) + 1
+		});
+	} catch (e: any) {
+		if (e.status === 404) {
+			await pb.collection('user_endpoint_usage').create({
+				user: userId,
+				endpoint: endpointId,
+				date: todayTimestamp,
+				input_tokens_used: inputTokens,
+				output_tokens_used: outputTokens,
+				request_count: 1
+			});
+		} else {
+			throw e;
+		}
+	}
+}
+
+/**
+ * Check if user has capacity for endpoint usage
+ * Checks both endpoint-level limits and user-specific limits
+ */
+export async function checkUserEndpointLimits(
+	userId: string,
+	endpointId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+	// First check global endpoint limits
+	const endpointCheck = await checkEndpointLimits(endpointId);
+	if (!endpointCheck.allowed) {
+		return endpointCheck;
+	}
+
+	// Then check user-specific limits
+	const userLimit = await getUserEndpointLimit(userId, endpointId);
+
+	// If no user-specific limit, they're unlimited (up to endpoint limits)
+	if (!userLimit) {
+		return { allowed: true };
+	}
+
+	const usage = await getUserEndpointUsageToday(userId, endpointId);
+
+	if (userLimit.max_input_tokens_per_day != null &&
+		usage.input_tokens_used >= userLimit.max_input_tokens_per_day) {
+		return {
+			allowed: false,
+			reason: 'You have reached your processing limit. Contact admin.'
+		};
+	}
+
+	if (userLimit.max_output_tokens_per_day != null &&
+		usage.output_tokens_used >= userLimit.max_output_tokens_per_day) {
+		return {
+			allowed: false,
+			reason: 'You have reached your processing limit. Contact admin.'
+		};
+	}
+
 	return { allowed: true };
 }

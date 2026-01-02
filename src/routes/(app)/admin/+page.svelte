@@ -33,7 +33,9 @@
 	interface Stats {
 		date: string;
 		instanceLimits: {
-			maxConcurrentJobs: number;
+			maxConcurrentProjects: number;
+			maxParallelRequests: number;
+			maxRequestsPerMinute: number;
 		};
 		endpoints: EndpointStat[];
 		jobs: {
@@ -109,6 +111,30 @@
 			{/each}
 		</div>
 	{:else if stats}
+		<!-- Instance Limits Card -->
+		<Card.Root class="border-dashed">
+			<Card.Header class="pb-2">
+				<Card.Title class="text-sm font-medium">Instance Limits (Deployer-Set)</Card.Title>
+				<Card.Description>These limits are set via environment variables and apply to all users</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<div class="grid gap-4 md:grid-cols-3">
+					<div class="flex flex-col">
+						<span class="text-2xl font-bold">{stats.instanceLimits.maxConcurrentProjects}</span>
+						<span class="text-xs text-muted-foreground">Max Concurrent Projects</span>
+					</div>
+					<div class="flex flex-col">
+						<span class="text-2xl font-bold">{stats.instanceLimits.maxParallelRequests}</span>
+						<span class="text-xs text-muted-foreground">Max Parallel Requests</span>
+					</div>
+					<div class="flex flex-col">
+						<span class="text-2xl font-bold">{stats.instanceLimits.maxRequestsPerMinute}</span>
+						<span class="text-xs text-muted-foreground">Max Requests/Minute</span>
+					</div>
+				</div>
+			</Card.Content>
+		</Card.Root>
+
 		<!-- Summary Cards -->
 		<div class="grid gap-4 md:grid-cols-3">
 			<Card.Root>
@@ -119,9 +145,9 @@
 				<Card.Content>
 					<div class="text-2xl font-bold">{stats.jobs.active}</div>
 					<p class="text-xs text-muted-foreground">
-						of {stats.instanceLimits.maxConcurrentJobs} max concurrent
+						of {stats.instanceLimits.maxConcurrentProjects} max concurrent projects
 					</p>
-					<Progress value={(stats.jobs.active / stats.instanceLimits.maxConcurrentJobs) * 100} class="mt-2" />
+					<Progress value={(stats.jobs.active / stats.instanceLimits.maxConcurrentProjects) * 100} class="mt-2" />
 				</Card.Content>
 			</Card.Root>
 

@@ -129,14 +129,12 @@ export enum ExtractionRowsStatusOptions {
 export type ExtractionRowsRecord<Trow_data = unknown> = {
 	approved_at?: IsoDateString
 	batch: RecordIdString[]
-	created?: IsoDateString
 	deleted_at?: IsoDateString
 	id: string
 	project: RecordIdString[]
 	row_data: null | Trow_data
 	row_index: number
 	status: ExtractionRowsStatusOptions
-	updated?: IsoDateString
 }
 
 export enum ImageBatchesStatusOptions {
@@ -161,14 +159,12 @@ export type ImagesRecord<Tbbox_used = unknown> = {
 	batch: RecordIdString[]
 	bbox_used?: null | Tbbox_used
 	column_id?: string
-	created?: IsoDateString
 	extracted_text?: string
 	id: string
 	image: string
 	is_cropped?: boolean
 	order: number
 	parent_image?: RecordIdString[]
-	updated?: IsoDateString
 }
 
 export enum InstalledAddonsContainerStatusOptions {

@@ -5,7 +5,7 @@ import { QueueManager } from './queue-manager';
 import { ConnectionPool } from './connection-pool';
 import type { QueueJob, WorkerConfig } from './types';
 import { convertPdfToImages, isPdfFile, type PdfConversionOptions } from '../pdf-converter';
-import { scaleImage } from '../image-scaler';
+import { scaleImageToMaxDimension } from '../image-scaler';
 import { buildModularPrompt, buildPerPagePrompt, formatExtractionsAsToon } from '$lib/prompt-presets';
 import { withFeatureFlagDefaults, createExtractionResult, type ExtractionFeatureFlags, type ExtractionResultInput } from '$lib/types/extraction';
 import { getBboxOrder } from '$lib/utils/coordinates';
@@ -19,6 +19,7 @@ import {
 	getEndpointWithLimits,
 	checkEndpointLimits,
 	updateEndpointUsage,
+	updateUserEndpointUsage,
 	type LlmEndpoint
 } from '../admin-auth';
 import { getInstanceLimits } from '../instance-config';
@@ -408,6 +409,7 @@ export class QueueWorker {
 			// Load project settings
 			const project = await this.pb.collection('projects').getOne(projectId);
 			const settings = project.settings;
+			const projectOwnerId = project.owner as string | undefined;
 
 			// Resolve endpoint settings (managed vs custom)
 			const endpointSettings = await this.resolveEndpointSettings(settings);
@@ -452,13 +454,13 @@ export class QueueWorker {
 				pages: []
 			}));
 
-			const imageScale = settings.imageScale ?? 100;
-			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency}, imageScale=${imageScale}%)`);
+			const imageMaxDimension = settings.imageMaxDimension ?? null;
+			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency}, imageMaxDimension=${imageMaxDimension ?? 'original'})`);
 
 			// 1. CONVERT ALL IMAGES/PDFs (can parallelize conversion)
 			await this.executeWithConcurrencyLimit(
 				items,
-				async (item) => this.convertSingleItem(item, pdfOptions, imageScale),
+				async (item) => this.convertSingleItem(item, pdfOptions, imageMaxDimension),
 				maxConcurrency
 			);
 
@@ -703,8 +705,8 @@ export class QueueWorker {
 				requestDetails: requestDetails.length > 0 ? requestDetails : undefined
 			});
 
-			// Track endpoint usage for managed endpoints
-			await this.trackEndpointUsage(managedEndpointId, totalInputTokens, totalOutputTokens);
+			// Track endpoint usage for managed endpoints (global and per-user)
+			await this.trackEndpointUsage(managedEndpointId, totalInputTokens, totalOutputTokens, projectOwnerId);
 		} catch (error: any) {
 			// Mark batch as failed
 			await this.pb.collection('image_batches').update(batchId, {
@@ -813,6 +815,7 @@ export class QueueWorker {
 			const project = await this.pb.collection('projects').getOne(projectId);
 			console.log(`[Redo] Loaded project: ${project.id}`);
 			const settings = project.settings;
+			const projectOwnerId = project.owner as string | undefined;
 
 			// Resolve endpoint settings (managed vs custom)
 			const endpointSettings = await this.resolveEndpointSettings(settings);
@@ -1010,8 +1013,8 @@ export class QueueWorker {
 				}]
 			});
 
-			// Track endpoint usage for managed endpoints
-			await this.trackEndpointUsage(managedEndpointId, inputTokens, outputTokens);
+			// Track endpoint usage for managed endpoints (global and per-user)
+			await this.trackEndpointUsage(managedEndpointId, inputTokens, outputTokens, projectOwnerId);
 		} catch (error: any) {
 			// Record failure metrics
 			await this.recordMetrics({
@@ -1553,15 +1556,22 @@ export class QueueWorker {
 	}
 
 	/**
-	 * Track token usage for managed endpoints
+	 * Track token usage for managed endpoints (both global and per-user)
 	 */
 	private async trackEndpointUsage(
 		managedEndpointId: string | null,
 		inputTokens: number,
-		outputTokens: number
+		outputTokens: number,
+		userId?: string
 	): Promise<void> {
 		if (managedEndpointId && (inputTokens > 0 || outputTokens > 0)) {
+			// Track global endpoint usage
 			await updateEndpointUsage(managedEndpointId, inputTokens, outputTokens);
+
+			// Track per-user endpoint usage if userId is provided
+			if (userId) {
+				await updateUserEndpointUsage(userId, managedEndpointId, inputTokens, outputTokens);
+			}
 		}
 	}
 
@@ -1673,6 +1683,16 @@ export class QueueWorker {
 				const decoded = decodeToon(fixedContent, { strict: false });
 				// Extract the extractions array from the decoded object
 				parsedData = (decoded as any)?.extractions ?? decoded;
+
+				// Unescape JSON string values (they were escaped for TOON parsing)
+				if (Array.isArray(parsedData)) {
+					parsedData = parsedData.map(item => ({
+						...item,
+						value: typeof item.value === 'string' && item.value.startsWith('{')
+							? item.value.replace(/\\"/g, '"')
+							: item.value
+					}));
+				}
 			} else {
 				// Content doesn't look like TOON, try JSON
 				console.log('Content does not appear to be TOON format, attempting JSON parse...');
@@ -1749,11 +1769,17 @@ export class QueueWorker {
 				const indent = indentMatch ? indentMatch[1] : '';
 				const rest = line.substring(indent.length);
 
-				// Split by tabs and quote values containing commas
+				// Split by tabs and quote values containing special characters
 				const values = rest.split('\t').map(val => {
-					// If value contains comma and isn't already quoted, quote it
-					if (val.includes(',') && !val.startsWith('"')) {
-						return `"${val}"`;
+					// Already properly quoted - keep as is
+					if (val.startsWith('"') && val.endsWith('"')) {
+						return val;
+					}
+					// Needs quoting (contains comma, quote, or looks like JSON)
+					if (val.includes(',') || val.includes('"') || val.startsWith('{')) {
+						// Escape internal quotes and wrap in quotes
+						const escaped = val.replace(/"/g, '\\"');
+						return `"${escaped}"`;
 					}
 					return val;
 				});
@@ -1852,7 +1878,7 @@ export class QueueWorker {
 	private async convertSingleItem(
 		item: ProcessableItem,
 		pdfOptions: PdfConversionOptions,
-		imageScale: number = 100
+		imageMaxDimension: number | null = null
 	): Promise<void> {
 		const url = this.pb.files.getURL(item.image, item.image.image);
 		let response: Response | null = await fetch(url);
@@ -1891,14 +1917,11 @@ export class QueueWorker {
 			let imageBuffer: Buffer | null = Buffer.from(arrayBuffer);
 			arrayBuffer = null; // Release arrayBuffer
 
-			// Apply scaling if < 100%
-			let finalMimeType = mimeType;
-			if (imageScale < 100) {
-				const scaled = await scaleImage(imageBuffer, imageScale);
-				imageBuffer = null; // Release original
-				imageBuffer = scaled.buffer; // sharp already returns a Buffer
-				finalMimeType = scaled.mimeType;
-			}
+			// Scale/normalize image (handles EXIF rotation + optional max dimension scaling)
+			const scaled = await scaleImageToMaxDimension(imageBuffer, imageMaxDimension);
+			imageBuffer = null; // Release original
+			imageBuffer = scaled.buffer;
+			const finalMimeType = scaled.mimeType;
 
 			const dataUrl = `data:${finalMimeType};base64,${imageBuffer.toString('base64')}`;
 			imageBuffer = null; // Release buffer after base64 encoding

@@ -149,7 +149,7 @@
 	let requestTimeout = $state<number>(API_DEFAULTS.requestTimeout);
 
 	// Image scaling (for non-PDF images)
-	let imageScale = $state<number>(100); // 100% = no scaling
+	let imageMaxDimension = $state<number | null>(null); // null = no scaling, otherwise max pixels for longest side
 
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
@@ -290,7 +290,7 @@
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
 
 			// Load image scaling
-			imageScale = settings.imageScale ?? 100;
+			imageMaxDimension = settings.imageMaxDimension ?? null;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -468,7 +468,7 @@
 				// API request settings
 				requestTimeout,
 				// Image scaling
-				imageScale,
+				imageMaxDimension,
 				// Sampling parameters
 				enableDeterministicMode,
 				temperature,
@@ -759,11 +759,10 @@
 							</p>
 						</div>
 
-						<!-- Image Scale Setting -->
-						<div class="space-y-2">
+						<!-- Max Image Size Setting -->
+						<div class="space-y-3">
 							<div class="flex items-center gap-2">
-								<Label for="imageScale">Image Scale</Label>
-								<span class="text-sm text-muted-foreground">{imageScale}%</span>
+								<Label for="imageMaxDimension">Max Image Size</Label>
 								<Tooltip.Root>
 									<Tooltip.Trigger>
 										{#snippet child({ props })}
@@ -773,23 +772,64 @@
 										{/snippet}
 									</Tooltip.Trigger>
 									<Tooltip.Content>
-										<div class="max-w-xs">
-											<p class="text-xs">Scale images before sending to AI. Lower values reduce API costs but may affect accuracy for small text.</p>
+										<div class="max-w-xs space-y-1">
+											<p class="text-xs font-medium">Longest Side Scaling</p>
+											<p class="text-xs">Images larger than this are scaled down so the longest side fits within this limit. Aspect ratio is always preserved.</p>
+											<p class="text-xs text-muted-foreground mt-1">Smaller = fewer tokens/lower cost. Claude recommends 1568px.</p>
 										</div>
 									</Tooltip.Content>
 								</Tooltip.Root>
 							</div>
-							<input
-								type="range"
-								id="imageScale"
-								bind:value={imageScale}
-								min="10"
-								max="100"
-								step="10"
-								class="w-full max-w-xs"
-							/>
+							<div class="flex items-center gap-2">
+								<Input
+									type="number"
+									id="imageMaxDimension"
+									value={imageMaxDimension ?? ''}
+									oninput={(e) => {
+										const val = e.currentTarget.value;
+										imageMaxDimension = val ? parseInt(val, 10) : null;
+									}}
+									placeholder="Original"
+									min="256"
+									max="8192"
+									step="1"
+									class="w-24 h-10"
+								/>
+								<span class="text-sm text-muted-foreground">px</span>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<Button
+									variant={imageMaxDimension === 512 ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => imageMaxDimension = 512}
+								>512</Button>
+								<Button
+									variant={imageMaxDimension === 1024 ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => imageMaxDimension = 1024}
+								>1024</Button>
+								<Button
+									variant={imageMaxDimension === 1568 ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => imageMaxDimension = 1568}
+								>1568</Button>
+								<Button
+									variant={imageMaxDimension === 2048 ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => imageMaxDimension = 2048}
+								>2048</Button>
+								<Button
+									variant={imageMaxDimension === null ? 'default' : 'outline'}
+									size="sm"
+									onclick={() => imageMaxDimension = null}
+								>Original</Button>
+							</div>
 							<p class="text-xs text-muted-foreground">
-								100% = original size, 50% = half dimensions
+								{#if imageMaxDimension}
+									Images with longest side > {imageMaxDimension}px will be scaled down.
+								{:else}
+									Images sent at original size (no scaling).
+								{/if}
 							</p>
 						</div>
 					</div>

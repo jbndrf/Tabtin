@@ -303,8 +303,6 @@
 		};
 	});
 
-	// Track the current batch ID to detect batch changes reliably
-	let currentBatchId = $state<string | null>(null);
 	// Unique key to force complete re-render of canvas elements
 	let canvasKey = $state(0);
 
@@ -333,62 +331,36 @@
 		}
 	});
 
-	// Reset all state when batch changes (triggered by batch ID change)
-	$effect(() => {
-		const batch = getCurrentBatch();
-		const batchId = batch?.id || null;
+	// Helper to reset all batch-specific state (called explicitly during transitions)
+	function resetBatchState() {
+		currentImageIndex = 0;
+		canvasKey++;
+		canvasElements = [];
+		imageElements = [];
+		loadedImageIndices = new Set();
+		expandedImages = [];
+		zoomLevels = [];
+		panX = [];
+		panY = [];
+		isDragging = false;
+		isImageSwiping = false;
+		isPanning = false;
+		isPinching = false;
+		imageSwipeOffsetX = 0;
+		offsetX = 0;
+		offsetY = 0;
+		rotation = 0;
+		editingFields = new Set();
+		editedValues = {};
+		cardSwipeState = {};
+		redoColumns = new Set();
+		exitCropMode();
+		customBoundingBoxes = {};
+		extractionRows = [];
+		currentRowIndex = 0;
+	}
 
-		// Only reset if batch ID actually changed
-		if (batchId !== currentBatchId) {
-			console.log('Batch changed, resetting state:', { from: currentBatchId, to: batchId });
-
-			// Reset all state
-			currentImageIndex = 0;
-			currentBatchId = batchId;
-
-			// Force complete re-creation of canvas/image elements by changing key
-			canvasKey++;
-
-			// Clear canvas arrays to force re-render
-			canvasElements = [];
-			imageElements = [];
-			loadedImageIndices = new Set();
-
-			// Clear expandedImages - will be repopulated when batch images load
-			expandedImages = [];
-
-			// Reset zoom/pan state (will be properly sized by effect when expandedImages loads)
-			zoomLevels = [];
-			panX = [];
-			panY = [];
-
-			// Reset swipe/gesture state
-			isDragging = false;
-			isImageSwiping = false;
-			isPanning = false;
-			isPinching = false;
-			imageSwipeOffsetX = 0;
-			offsetX = 0;
-			offsetY = 0;
-			rotation = 0;
-
-			// Reset edit mode
-			editingFields = new Set();
-			editedValues = {};
-
-			// Reset card swipe state
-			cardSwipeState = {};
-
-			// Reset redo columns
-			redoColumns = new Set();
-
-			// Reset crop mode and custom bounding boxes
-			exitCropMode();
-			customBoundingBoxes = {};
-		}
-	});
-
-	async function loadBatchImages(batchIndex: number) {
+	async function loadBatchImages(batchIndex: number, updateExpandedImages: boolean = true) {
 		if (batchIndex >= allBatches.length) return;
 
 		loadingBatchImages = true;
@@ -400,28 +372,31 @@
 				requestKey: `review_images_${batch.id}`
 			});
 
-			// Load extraction_rows for this batch
-			const rows = await pb.collection('extraction_rows').getFullList({
-				filter: `batch = '${batch.id}' && status = 'review'`,
-				sort: 'row_index',
-				requestKey: `review_extraction_rows_${batch.id}`
-			});
-
-			extractionRows = rows;
-			currentRowIndex = 0;
-
 			// Add to batches array if not already loaded
 			if (!batches[batchIndex]) {
 				batches[batchIndex] = { ...batch, images };
 			}
 
-			// Expand images to handle PDFs (renders PDF pages to canvases)
-			loadingPdfs = true;
-			try {
-				expandedImages = await expandBatchImages(images);
-				console.log('Expanded images:', expandedImages.length, 'from', images.length, 'original files');
-			} finally {
-				loadingPdfs = false;
+			// Only update current batch state if this is not a preload
+			if (updateExpandedImages) {
+				// Load extraction_rows for this batch
+				const rows = await pb.collection('extraction_rows').getFullList({
+					filter: `batch = '${batch.id}' && status = 'review'`,
+					sort: 'row_index',
+					requestKey: `review_extraction_rows_${batch.id}`
+				});
+
+				extractionRows = rows;
+				currentRowIndex = 0;
+
+				// Expand images to handle PDFs (renders PDF pages to canvases)
+				loadingPdfs = true;
+				try {
+					expandedImages = await expandBatchImages(images);
+					console.log('Expanded images:', expandedImages.length, 'from', images.length, 'original files');
+				} finally {
+					loadingPdfs = false;
+				}
 			}
 		} catch (error: any) {
 			if (!error?.isAbort) {
@@ -454,6 +429,10 @@
 	}
 
 	function getCurrentRow() {
+		// Bounds checking to prevent accessing invalid indices
+		if (currentRowIndex < 0 || currentRowIndex >= extractionRows.length) {
+			return null;
+		}
 		return extractionRows[currentRowIndex];
 	}
 
@@ -974,35 +953,29 @@
 	}
 
 	async function moveToNextBatch() {
-		console.log('Moving to next batch, current batches:', batches.length);
+		console.log('Moving to next batch, current index:', currentBatchIndex, 'total:', allBatches.length);
 
 		// Reset card animation state first
 		resetCard();
 		isAnimating = false;
 
-		// Remove current batch from arrays
-		batches = batches.filter((_, i) => i !== currentBatchIndex);
-		allBatches = allBatches.filter((_, i) => i !== currentBatchIndex);
+		// Increment index
+		currentBatchIndex++;
 
-		if (allBatches.length === 0) {
+		// Check if we've gone through all batches
+		if (currentBatchIndex >= allBatches.length) {
 			toast.info(t('images.review.toast.all_reviewed'));
 			goto(`/projects/${data.projectId}`);
 			return;
 		}
 
-		// Load images for the next batch if not already loaded
-		if (!batches[currentBatchIndex]) {
-			await loadBatchImages(currentBatchIndex);
-		}
+		// Reset all batch-specific state BEFORE loading new data
+		resetBatchState();
 
-		// Force complete state reset by clearing batch ID and triggering reactivity
-		// Step 1: Clear the batch ID to force the $effect to reset everything
-		currentBatchId = null;
+		// Load new batch data
+		await loadBatchImages(currentBatchIndex);
 
-		// Step 2: Trigger Svelte reactivity by creating a new array reference
-		batches = [...batches];
-
-		// Step 3: After DOM updates, ensure canvases are re-rendered
+		// After DOM updates, ensure canvases are re-rendered
 		requestAnimationFrame(() => {
 			console.log('Forcing canvas re-render after batch transition');
 			renderAllCanvases();
@@ -1010,8 +983,8 @@
 
 		// Preload next batch images in background
 		if (currentBatchIndex + 1 < allBatches.length && !batches[currentBatchIndex + 1]) {
-			// Load batch metadata
-			loadBatchImages(currentBatchIndex + 1);
+			// Load batch metadata only - don't update expandedImages (would cause race condition)
+			loadBatchImages(currentBatchIndex + 1, false);
 
 			// Also preload actual image files into browser cache
 			const nextBatch = allBatches[currentBatchIndex + 1];
@@ -1831,6 +1804,7 @@
 			// Upload cropped images to PocketBase
 			const croppedImageIds: Record<string, string> = {};
 			const sourceImageIds: Record<string, string> = {}; // Track which source image each crop came from
+			let actualBatchId: string | null = null; // Track the actual batch ID from source images
 			let orderCounter = (batch.images?.length || 0) + 1;
 
 			for (const [columnId, box] of Object.entries(customBoundingBoxes)) {
@@ -1890,7 +1864,27 @@
 				// Create FormData and upload to PocketBase
 				const formData = new FormData();
 				formData.append('image', blob, `crop_${columnId}_${Date.now()}.jpg`);
-				formData.append('batch', batch.id);
+				// Use the source image's batch ID to ensure correct association
+				// This prevents race conditions where getCurrentBatch() might return the wrong batch
+				const sourceBatchId = Array.isArray(vImage.originalImage.batch)
+					? vImage.originalImage.batch[0]
+					: vImage.originalImage.batch;
+
+				// Validate that source batch matches current batch (detect state corruption)
+				if (batch.id !== sourceBatchId) {
+					console.error('Batch mismatch detected!', {
+						currentBatchId: batch.id,
+						sourceBatchId,
+						imageId: vImage.originalImage.id
+					});
+					toast.error('State error: Image belongs to different batch. Please refresh the page.');
+					isAnimating = false;
+					return;
+				}
+
+				formData.append('batch', sourceBatchId);
+				// Track the actual batch ID for the API call
+				if (!actualBatchId) actualBatchId = sourceBatchId;
 				formData.append('order', String(orderCounter++));
 				// Parent is the original image record
 				formData.append('parent_image', vImage.originalImage.id);
@@ -1926,13 +1920,14 @@
 			toast.info('Adding redo processing to queue...');
 
 			// Call the queue redo endpoint with cropped image IDs and source image IDs
+			// Use actualBatchId from the source images to ensure consistency with the cropped images
 			const response = await fetch('/api/queue/redo', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({
-					batchId: batch.id,
+					batchId: actualBatchId || batch.id,
 					projectId: data.projectId,
 					rowIndex: getCurrentRow()?.row_index ?? currentRowIndex,
 					redoColumnIds: Array.from(redoColumns),
@@ -1958,6 +1953,9 @@
 			console.error('Failed to process redo:', error);
 			toast.error(error instanceof Error ? error.message : 'Failed to process redo');
 			isAnimating = false;
+			// Clear stale crop data on error to prevent state corruption
+			customBoundingBoxes = {};
+			redoColumns = new Set();
 		}
 	}
 </script>
@@ -1969,7 +1967,7 @@
 			<p class="text-lg font-medium">{t('images.review.loading')}</p>
 		</div>
 	</div>
-{:else if batches.length === 0}
+{:else if allBatches.length === 0 || currentBatchIndex >= allBatches.length}
 	<div class="flex h-screen items-center justify-center bg-background">
 		<div class="text-center">
 			<p class="mb-2 text-xl font-medium">{t('images.review.no_batches')}</p>
@@ -2041,17 +2039,17 @@
 		<!-- Batch Counter -->
 		<div class="absolute left-1/2 top-3 z-40 -translate-x-1/2">
 			<div class="rounded-full bg-black/50 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-				{currentBatchIndex + 1} / {batches.length}
+				{currentBatchIndex + 1} / {allBatches.length}
 			</div>
 		</div>
 
 		<!-- Main Content - Fullscreen -->
 		<div class="relative flex flex-1 flex-col overflow-hidden">
-			<!-- Stack effect - background cards -->
-			{#if batches.length > 1}
+			<!-- Stack effect - background cards (show based on remaining batches) -->
+			{#if allBatches.length - currentBatchIndex > 1}
 				<div class="absolute inset-x-4 top-2 bottom-0 rounded-t-3xl bg-card shadow-lg" style="transform: scale(0.97); z-index: 0;"></div>
 			{/if}
-			{#if batches.length > 2}
+			{#if allBatches.length - currentBatchIndex > 2}
 				<div class="absolute inset-x-4 top-4 bottom-0 rounded-t-3xl bg-card shadow-md" style="transform: scale(0.94); z-index: 0;"></div>
 			{/if}
 
