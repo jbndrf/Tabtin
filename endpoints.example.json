@@ -1,0 +1,46 @@
+[
+  {
+    "alias": "gpt-4o",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "${OPENAI_API_KEY}",
+    "model": "gpt-4o",
+    "maxInputTokensPerDay": 10000000,
+    "maxOutputTokensPerDay": 2000000,
+    "defaultTemperature": 0.1,
+    "description": "OpenAI GPT-4o - Fast and capable",
+    "providerType": "openai"
+  },
+  {
+    "alias": "gpt-4o-mini",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "${OPENAI_API_KEY}",
+    "model": "gpt-4o-mini",
+    "maxInputTokensPerDay": 50000000,
+    "maxOutputTokensPerDay": 10000000,
+    "defaultTemperature": 0.1,
+    "description": "OpenAI GPT-4o Mini - Budget friendly",
+    "providerType": "openai"
+  },
+  {
+    "alias": "claude-sonnet",
+    "endpoint": "https://api.anthropic.com/v1/messages",
+    "apiKey": "${ANTHROPIC_API_KEY}",
+    "model": "claude-sonnet-4-20250514",
+    "maxInputTokensPerDay": 10000000,
+    "maxOutputTokensPerDay": 2000000,
+    "defaultTemperature": 0.1,
+    "description": "Anthropic Claude Sonnet - Best for vision",
+    "providerType": "anthropic"
+  },
+  {
+    "alias": "qwen-vl-local",
+    "endpoint": "http://localhost:8000/v1/chat/completions",
+    "apiKey": "not-needed",
+    "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "maxInputTokensPerDay": 100000000,
+    "maxOutputTokensPerDay": 20000000,
+    "defaultTemperature": 0.1,
+    "description": "Local Qwen VL via vLLM",
+    "providerType": "openai"
+  }
+]

@@ -358,6 +358,7 @@
 		customBoundingBoxes = {};
 		extractionRows = [];
 		currentRowIndex = 0;
+		focusedColumnId = null; // Show all bounding boxes on new batch
 	}
 
 	async function loadBatchImages(batchIndex: number, updateExpandedImages: boolean = true) {
