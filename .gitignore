@@ -15,5 +15,11 @@ data/pb_data
 !pb/pocketbase
 pb/pocketbase.exe
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Misc
 token-analysis.html

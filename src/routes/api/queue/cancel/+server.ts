@@ -1,10 +1,11 @@
 // API endpoint to cancel queued/processing jobs
 
-import { json } from '@sveltejs/kit';
+import { json, error } from '@sveltejs/kit';
 import { getQueueManager } from '$lib/server/queue';
 import { env as privateEnv } from '$env/dynamic/private';
 import { env as publicEnv } from '$env/dynamic/public';
 import PocketBase from 'pocketbase';
+import { requireProjectAuth } from '$lib/server/authorization';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -14,14 +15,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		console.log('[cancel endpoint] Request data:', { projectId, batchIds });
 
 		if (!projectId) {
-			return json(
-				{
-					success: false,
-					error: 'projectId is required'
-				},
-				{ status: 400 }
-			);
+			throw error(400, 'projectId is required');
 		}
+
+		// Security: Require auth + project ownership
+		await requireProjectAuth(locals, projectId);
 
 		console.log('[cancel endpoint] Getting queue manager');
 		const queueManager = getQueueManager();

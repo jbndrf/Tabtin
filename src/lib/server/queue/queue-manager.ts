@@ -128,7 +128,7 @@ export class QueueManager {
 			// Only get jobs that are still "queued" and ready to be processed (queuedAt <= now)
 			// Jobs without queuedAt (legacy) are processed immediately via the empty string check
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
-				filter: `status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+				filter: pb.filter('status = "queued" && (queuedAt = "" || queuedAt <= {:now})', { now }),
 				sort: '+priority,+queuedAt,+created' // Sort by priority, then queuedAt, then created for FIFO
 			});
 
@@ -256,7 +256,7 @@ export class QueueManager {
 
 			// Filter by projectId AND status
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
-				filter: `projectId = "${projectId}" && status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+				filter: pb.filter('projectId = {:projectId} && status = "queued" && (queuedAt = "" || queuedAt <= {:now})', { projectId, now }),
 				sort: '+priority,+queuedAt,+created'
 			});
 
@@ -303,7 +303,7 @@ export class QueueManager {
 
 		// Get all queued jobs and extract unique projectIds
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
-			filter: `status = "queued" && (queuedAt = "" || queuedAt <= "${now}")`,
+			filter: pb.filter('status = "queued" && (queuedAt = "" || queuedAt <= {:now})', { now }),
 			fields: 'projectId'
 		});
 
@@ -315,8 +315,8 @@ export class QueueManager {
 	async getJobsByProject(projectId: string, status?: JobStatus): Promise<QueueJob[]> {
 		const pb = await this.getPocketBase();
 		const filter = status
-			? `projectId = "${projectId}" && status = "${status}"`
-			: `projectId = "${projectId}"`;
+			? pb.filter('projectId = {:projectId} && status = {:status}', { projectId, status })
+			: pb.filter('projectId = {:projectId}', { projectId });
 
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
 			filter,
@@ -328,12 +328,12 @@ export class QueueManager {
 
 	async getStats(): Promise<QueueStats> {
 		const pb = await this.getPocketBase();
-		const statuses = ['queued', 'processing', 'completed', 'failed'];
+		const statuses = ['queued', 'processing', 'completed', 'failed'] as const;
 		const counts: Record<string, number> = {};
 
 		for (const status of statuses) {
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
-				filter: `status = "${status}"`
+				filter: pb.filter('status = {:status}', { status })
 			});
 			counts[status] = records.totalItems;
 		}
@@ -349,12 +349,12 @@ export class QueueManager {
 
 	async getProjectStats(projectId: string): Promise<QueueStats> {
 		const pb = await this.getPocketBase();
-		const statuses = ['queued', 'processing', 'completed', 'failed'];
+		const statuses = ['queued', 'processing', 'completed', 'failed'] as const;
 		const counts: Record<string, number> = {};
 
 		for (const status of statuses) {
 			const records = await pb.collection(QUEUE_COLLECTION).getList(1, 1, {
-				filter: `projectId = "${projectId}" && status = "${status}"`
+				filter: pb.filter('projectId = {:projectId} && status = {:status}', { projectId, status })
 			});
 			counts[status] = records.totalItems;
 		}
@@ -372,9 +372,10 @@ export class QueueManager {
 		const pb = await this.getPocketBase();
 		const cutoffDate = new Date();
 		cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
+		const cutoffDateStr = cutoffDate.toISOString().replace('T', ' ');
 
 		const records = await pb.collection(QUEUE_COLLECTION).getFullList({
-			filter: `status = "completed" && completedAt < "${cutoffDate.toISOString().replace('T', ' ')}"`
+			filter: pb.filter('status = "completed" && completedAt < {:cutoffDate}', { cutoffDate: cutoffDateStr })
 		});
 
 		for (const record of records) {

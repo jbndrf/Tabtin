@@ -1,5 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { requireAuth } from '$lib/server/authorization';
+import { validateExternalUrl } from '$lib/server/url-validator';
 import {
 	SCHEMA_CHAT_TOOLS,
 	isApprovalRequired,
@@ -315,6 +317,15 @@ async function handleChatMode(body: ChatModeRequest) {
 		return json({ error: 'LLM settings (endpoint and modelName) are required' }, { status: 400 });
 	}
 
+	// Security: SSRF protection - validate endpoint URL before fetching
+	const urlValidation = await validateExternalUrl(settings.endpoint);
+	if (!urlValidation.allowed) {
+		return json(
+			{ error: `Invalid LLM endpoint: ${urlValidation.reason}` },
+			{ status: 400 }
+		);
+	}
+
 	// Build system prompt with current schema, settings, and document memory
 	const systemPrompt = buildSystemPromptWithSchema(
 		currentColumns.map((c) => ({
@@ -564,8 +575,11 @@ async function handleExecuteMode(body: ExecuteModeRequest) {
 	});
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
+		// Security: Require authentication
+		requireAuth(locals);
+
 		const body = (await request.json()) as SchemaChatRequest;
 
 		if (body.mode === 'execute') {

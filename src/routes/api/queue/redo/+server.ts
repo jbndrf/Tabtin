@@ -3,9 +3,10 @@
 import { json } from '@sveltejs/kit';
 import { getQueueManager, notifyJobEnqueued } from '$lib/server/queue';
 import { checkProjectProcessingLimits } from '$lib/server/admin-auth';
+import { requireProjectAuth } from '$lib/server/authorization';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const { batchId, projectId, rowIndex = 0, redoColumnIds, croppedImageIds, sourceImageIds, priority = 5 } =
 			await request.json();
@@ -19,6 +20,9 @@ export const POST: RequestHandler = async ({ request }) => {
 				{ status: 400 }
 			);
 		}
+
+		// Security: Require auth + project ownership
+		await requireProjectAuth(locals, projectId);
 
 		// Check limits before accepting jobs
 		const limitCheck = await checkProjectProcessingLimits(projectId);

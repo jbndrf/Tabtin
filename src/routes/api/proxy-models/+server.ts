@@ -1,12 +1,26 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { requireAuth } from '$lib/server/authorization';
+import { validateExternalUrl } from '$lib/server/url-validator';
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
+		// Security: Require authentication
+		requireAuth(locals);
+
 		const { endpoint, apiKey } = await request.json();
 
 		if (!endpoint) {
 			return json({ error: 'Endpoint is required' }, { status: 400 });
+		}
+
+		// Security: SSRF protection - validate URL before fetching
+		const urlValidation = await validateExternalUrl(endpoint);
+		if (!urlValidation.allowed) {
+			return json(
+				{ error: `Invalid endpoint URL: ${urlValidation.reason}` },
+				{ status: 400 }
+			);
 		}
 
 		// Convert endpoint to models endpoint

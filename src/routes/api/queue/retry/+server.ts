@@ -1,50 +1,38 @@
 // API endpoint to retry failed jobs
 
-import { json } from '@sveltejs/kit';
+import { json, error } from '@sveltejs/kit';
 import { getQueueManager } from '$lib/server/queue';
 import { checkProjectProcessingLimits, getAdminPb } from '$lib/server/admin-auth';
-import { getInstanceLimits } from '$lib/server/instance-config';
+import { requireAuth, requireProjectOwnership } from '$lib/server/authorization';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
+		// Security: Require authentication
+		requireAuth(locals);
+
 		const { jobId, projectId, retryAll } = await request.json();
 		const queueManager = getQueueManager();
 
 		if (retryAll) {
-			// For retryAll, check project limits if projectId provided, otherwise check instance limits
-			if (projectId) {
-				const limitCheck = await checkProjectProcessingLimits(projectId);
-				if (!limitCheck.allowed) {
-					return json(
-						{
-							success: false,
-							error: limitCheck.reason,
-							limitExceeded: true
-						},
-						{ status: 429 }
-					);
-				}
-			} else {
-				// Check instance-wide limits for global retry
-				const pb = await getAdminPb();
-				const instanceLimits = getInstanceLimits();
-				const activeJobs = await pb.collection('queue_jobs').getFullList({
-					filter: 'status = "processing"',
-					fields: 'projectId'
-				});
-				const activeProjectIds = new Set(activeJobs.map((j) => j.projectId).filter(Boolean));
+			// Security: retryAll requires explicit projectId - no global retry allowed
+			if (!projectId) {
+				throw error(400, 'projectId is required for retryAll');
+			}
 
-				if (activeProjectIds.size >= instanceLimits.maxConcurrentProjects) {
-					return json(
-						{
-							success: false,
-							error: `Instance is at maximum concurrent projects (${activeProjectIds.size}/${instanceLimits.maxConcurrentProjects})`,
-							limitExceeded: true
-						},
-						{ status: 429 }
-					);
-				}
+			// Security: Verify user owns this project
+			await requireProjectOwnership(locals.pb, locals.user!.id, projectId);
+
+			const limitCheck = await checkProjectProcessingLimits(projectId);
+			if (!limitCheck.allowed) {
+				return json(
+					{
+						success: false,
+						error: limitCheck.reason,
+						limitExceeded: true
+					},
+					{ status: 429 }
+				);
 			}
 
 			const count = await queueManager.retryAllFailed(projectId);
@@ -54,28 +42,28 @@ export const POST: RequestHandler = async ({ request }) => {
 				message: `${count} failed jobs queued for retry`
 			});
 		} else if (jobId) {
-			// For single job retry, look up the job to get projectId and check limits
+			// For single job retry, look up the job to get projectId and verify ownership
 			const pb = await getAdminPb();
-			try {
-				const job = await pb.collection('queue_jobs').getOne(jobId);
-				const jobProjectId = job.data?.projectId;
+			const job = await pb.collection('queue_jobs').getOne(jobId);
+			const jobProjectId = job.projectId;
 
-				if (jobProjectId) {
-					const limitCheck = await checkProjectProcessingLimits(jobProjectId);
-					if (!limitCheck.allowed) {
-						return json(
-							{
-								success: false,
-								error: limitCheck.reason,
-								limitExceeded: true
-							},
-							{ status: 429 }
-						);
-					}
-				}
-			} catch (e: any) {
-				// Job not found or other error - let retryFailed handle it
-				console.warn(`[Retry] Could not check limits for job ${jobId}:`, e.message);
+			if (!jobProjectId) {
+				throw error(400, 'Job has no associated project');
+			}
+
+			// Security: Verify user owns this job's project
+			await requireProjectOwnership(locals.pb, locals.user!.id, jobProjectId);
+
+			const limitCheck = await checkProjectProcessingLimits(jobProjectId);
+			if (!limitCheck.allowed) {
+				return json(
+					{
+						success: false,
+						error: limitCheck.reason,
+						limitExceeded: true
+					},
+					{ status: 429 }
+				);
 			}
 
 			await queueManager.retryFailed(jobId);

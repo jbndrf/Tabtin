@@ -1,23 +1,11 @@
 // API endpoint to delete batches with all related data (extraction_rows, images)
 
 import { json, error } from '@sveltejs/kit';
-import PocketBase from 'pocketbase';
-import { env as privateEnv } from '$env/dynamic/private';
-import { env as publicEnv } from '$env/dynamic/public';
+import { getAdminPb } from '$lib/server/admin-auth';
+import { requireProjectAuth } from '$lib/server/authorization';
 import type { RequestHandler } from './$types';
 
-async function getAdminPb(): Promise<PocketBase> {
-	const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
-	const adminEmail = privateEnv.POCKETBASE_ADMIN_EMAIL || 'admin@example.com';
-	const adminPassword = privateEnv.POCKETBASE_ADMIN_PASSWORD || 'admin1234';
-
-	const pb = new PocketBase(pocketbaseUrl);
-	pb.autoCancellation(false);
-	await pb.collection('_superusers').authWithPassword(adminEmail, adminPassword);
-	return pb;
-}
-
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const { batchIds, projectId } = await request.json();
 
@@ -28,6 +16,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			throw error(400, 'projectId is required');
 		}
 
+		// Security: Require auth + project ownership
+		await requireProjectAuth(locals, projectId);
+
 		const pb = await getAdminPb();
 
 		let successCount = 0;
@@ -37,7 +28,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			try {
 				// 1. Delete all extraction_rows for this batch
 				const rows = await pb.collection('extraction_rows').getFullList({
-					filter: `batch = '${batchId}'`
+					filter: pb.filter('batch = {:batchId}', { batchId })
 				});
 				for (const row of rows) {
 					await pb.collection('extraction_rows').delete(row.id);
@@ -45,7 +36,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 				// 2. Delete all images for this batch
 				const images = await pb.collection('images').getFullList({
-					filter: `batch = '${batchId}'`
+					filter: pb.filter('batch = {:batchId}', { batchId })
 				});
 				for (const image of images) {
 					await pb.collection('images').delete(image.id);

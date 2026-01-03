@@ -3,10 +3,14 @@
 import { json } from '@sveltejs/kit';
 import PocketBase from 'pocketbase';
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
+import { requireAdmin } from '$lib/server/admin-auth';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async ({ url, locals }) => {
 	try {
+		// Security: Admin only - exposes aggregate processing statistics
+		requireAdmin(locals);
+
 		const projectId = url.searchParams.get('projectId');
 		const timeRange = url.searchParams.get('timeRange') || '24h'; // 24h, 7d, 30d, all
 

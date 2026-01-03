@@ -42,6 +42,29 @@ export interface PdfConversionOptions {
 	format?: 'png' | 'jpeg';
 	/** JPEG quality (0.0 - 1.0, only used if format is 'jpeg') */
 	quality?: number;
+	/** Maximum number of pages to convert (default: 100) */
+	maxPages?: number;
+	/** Timeout in milliseconds (default: 300000 = 5 minutes) */
+	timeout?: number;
+}
+
+// Security constants
+const DEFAULT_MAX_PAGES = 100;
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Sanitize a filename to prevent path traversal attacks
+ * Removes or replaces dangerous characters
+ */
+function sanitizeFileName(fileName: string): string {
+	// Remove path components (directory traversal)
+	const baseName = fileName.split(/[/\\]/).pop() || 'document';
+	// Remove or replace dangerous characters
+	return baseName
+		.replace(/\.\./g, '') // Remove ..
+		.replace(/[<>:"|?*\x00-\x1f]/g, '_') // Replace dangerous chars
+		.replace(/^\.+/, '') // Remove leading dots
+		.trim() || 'document';
 }
 
 export interface ConvertedPage {
@@ -86,128 +109,169 @@ export async function convertPdfToImages(
 		maxWidth = 7100,
 		maxHeight = 7100,
 		format = 'png',
-		quality = 1.0
+		quality = 1.0,
+		maxPages = DEFAULT_MAX_PAGES,
+		timeout = DEFAULT_TIMEOUT_MS
 	} = options;
+
+	// Security: Sanitize the filename
+	const safeFileName = sanitizeFileName(fileName);
 
 	let pdf: any = null;
 	const canvasFactory = createNodeCanvasFactory();
+	let timeoutId: NodeJS.Timeout | null = null;
+	let isTimedOut = false;
 
-	try {
-		const loadingTask = pdfjsLib.getDocument({
-			data: new Uint8Array(pdfBuffer),
-			isEvalSupported: false,
-			useSystemFonts: true,
-			canvasFactory
-		} as any);
-		pdf = await loadingTask.promise;
-		const totalPages = pdf.numPages;
+	// Create a timeout promise for the entire operation
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeoutId = setTimeout(() => {
+			isTimedOut = true;
+			reject(new Error(`PDF conversion timed out after ${timeout / 1000} seconds`));
+		}, timeout);
+	});
 
-		console.log(`Converting PDF: ${fileName} (${totalPages} pages) at ${Math.round(scale * 72)} DPI`);
+	// Wrap the conversion in a function we can race against the timeout
+	const conversionPromise = async (): Promise<ConvertedPage[]> => {
+		try {
+			const loadingTask = pdfjsLib.getDocument({
+				data: new Uint8Array(pdfBuffer),
+				isEvalSupported: false,
+				useSystemFonts: true,
+				canvasFactory
+			} as any);
+			pdf = await loadingTask.promise;
+			const totalPages = pdf.numPages;
 
-		const convertedPages: ConvertedPage[] = [];
+			// Security: Check page count limit
+			if (totalPages > maxPages) {
+				throw new Error(`PDF has ${totalPages} pages, which exceeds the maximum limit of ${maxPages} pages`);
+			}
 
-		// Convert each page
-		for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-			// Report progress
+			console.log(`Converting PDF: ${safeFileName} (${totalPages} pages) at ${Math.round(scale * 72)} DPI`);
+
+			const convertedPages: ConvertedPage[] = [];
+
+			// Convert each page
+			for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+				// Check for timeout between pages
+				if (isTimedOut) {
+					throw new Error('PDF conversion was cancelled due to timeout');
+				}
+
+				// Report progress
+				if (onProgress) {
+					onProgress({
+						currentPage: pageNum,
+						totalPages,
+						percentage: Math.round(((pageNum - 1) / totalPages) * 100)
+					});
+				}
+
+				// Get the page
+				const page = await pdf.getPage(pageNum);
+
+				// Extract text content from the page
+				const textContent = await page.getTextContent();
+				const extractedText = textContent.items
+					.map((item: any) => item.str)
+					.join(' ')
+					.trim();
+
+				// Calculate initial viewport with the provided scale
+				const initialViewport = page.getViewport({ scale });
+
+				// Calculate final scale factor respecting max width/height
+				let finalScale = scale;
+				const { width: initialWidth, height: initialHeight } = initialViewport;
+
+				if (initialWidth > maxWidth || initialHeight > maxHeight) {
+					const widthScale = maxWidth / initialWidth;
+					const heightScale = maxHeight / initialHeight;
+					const scaleReduction = Math.min(widthScale, heightScale);
+					finalScale = scale * scaleReduction;
+				}
+
+				// Get the final viewport with the adjusted scale
+				const finalViewport = page.getViewport({ scale: finalScale });
+
+				// Create canvas with exact dimensions from the final viewport
+				const canvas = createCanvas(finalViewport.width, finalViewport.height);
+				const context = canvas.getContext('2d');
+
+				// Render page to canvas
+				const renderContext = {
+					canvasContext: context,
+					viewport: finalViewport
+				};
+
+				await page.render(renderContext as any).promise;
+
+				// Convert canvas to buffer
+				const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+				const buffer =
+					format === 'jpeg'
+						? canvas.toBuffer('image/jpeg', Math.round(quality * 100))
+						: canvas.toBuffer('image/png');
+
+				// Create file name using sanitized filename
+				const originalName = safeFileName.replace(/\.pdf$/i, '');
+				const extension = format === 'jpeg' ? 'jpg' : 'png';
+				const outputFileName = `${originalName}_page_${pageNum}.${extension}`;
+
+				convertedPages.push({
+					pageNumber: pageNum,
+					buffer,
+					fileName: outputFileName,
+					mimeType,
+					extractedText
+				});
+
+				console.log(
+					`Converted page ${pageNum}/${totalPages}: ${outputFileName} (${Math.round(buffer.length / 1024)}KB)`
+				);
+			}
+
+			// Final progress update
 			if (onProgress) {
 				onProgress({
-					currentPage: pageNum,
+					currentPage: totalPages,
 					totalPages,
-					percentage: Math.round(((pageNum - 1) / totalPages) * 100)
+					percentage: 100
 				});
 			}
 
-			// Get the page
-			const page = await pdf.getPage(pageNum);
+			// Destroy PDF document to release memory
+			pdf.destroy();
 
-			// Extract text content from the page
-			const textContent = await page.getTextContent();
-			const extractedText = textContent.items
-				.map((item: any) => item.str)
-				.join(' ')
-				.trim();
-
-			// Calculate initial viewport with the provided scale
-			const initialViewport = page.getViewport({ scale });
-
-			// Calculate final scale factor respecting max width/height
-			let finalScale = scale;
-			const { width: initialWidth, height: initialHeight } = initialViewport;
-
-			if (initialWidth > maxWidth || initialHeight > maxHeight) {
-				const widthScale = maxWidth / initialWidth;
-				const heightScale = maxHeight / initialHeight;
-				const scaleReduction = Math.min(widthScale, heightScale);
-				finalScale = scale * scaleReduction;
+			console.log(`PDF conversion complete: ${convertedPages.length} pages`);
+			return convertedPages;
+		} catch (error) {
+			// Destroy PDF document on error to prevent memory leak
+			if (pdf) {
+				try {
+					pdf.destroy();
+				} catch {
+					// Ignore destroy errors
+				}
 			}
-
-			// Get the final viewport with the adjusted scale
-			const finalViewport = page.getViewport({ scale: finalScale });
-
-			// Create canvas with exact dimensions from the final viewport
-			const canvas = createCanvas(finalViewport.width, finalViewport.height);
-			const context = canvas.getContext('2d');
-
-			// Render page to canvas
-			const renderContext = {
-				canvasContext: context,
-				viewport: finalViewport
-			};
-
-			await page.render(renderContext as any).promise;
-
-			// Convert canvas to buffer
-			const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
-			const buffer =
-				format === 'jpeg'
-					? canvas.toBuffer('image/jpeg', Math.round(quality * 100))
-					: canvas.toBuffer('image/png');
-
-			// Create file name
-			const originalName = fileName.replace(/\.pdf$/i, '');
-			const extension = format === 'jpeg' ? 'jpg' : 'png';
-			const outputFileName = `${originalName}_page_${pageNum}.${extension}`;
-
-			convertedPages.push({
-				pageNumber: pageNum,
-				buffer,
-				fileName: outputFileName,
-				mimeType,
-				extractedText
-			});
-
-			console.log(
-				`Converted page ${pageNum}/${totalPages}: ${outputFileName} (${Math.round(buffer.length / 1024)}KB)`
-			);
+			throw error;
 		}
+	};
 
-		// Final progress update
-		if (onProgress) {
-			onProgress({
-				currentPage: totalPages,
-				totalPages,
-				percentage: 100
-			});
-		}
-
-		// Destroy PDF document to release memory
-		pdf.destroy();
-
-		console.log(`PDF conversion complete: ${convertedPages.length} pages`);
-		return convertedPages;
+	try {
+		// Race the conversion against the timeout
+		const result = await Promise.race([conversionPromise(), timeoutPromise]);
+		return result;
 	} catch (error) {
-		// Destroy PDF document on error to prevent memory leak
-		if (pdf) {
-			try {
-				pdf.destroy();
-			} catch {
-				// Ignore destroy errors
-			}
-		}
 		console.error('PDF conversion failed:', error);
 		throw new Error(
 			`Failed to convert PDF: ${error instanceof Error ? error.message : 'Unknown error'}`
 		);
+	} finally {
+		// Clear the timeout
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
 	}
 }
 

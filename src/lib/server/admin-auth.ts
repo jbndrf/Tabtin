@@ -521,7 +521,7 @@ async function checkUserProcessingLimits(
 
 	// Get projects owned by this user
 	const userProjects = await pb.collection('projects').getFullList({
-		filter: `owner = "${userId}"`,
+		filter: pb.filter('owner = {:userId}', { userId }),
 		fields: 'id'
 	});
 	const userProjectIds = new Set(userProjects.map(p => p.id));
@@ -583,7 +583,7 @@ export async function getUserEndpointLimits(userId: string): Promise<UserEndpoin
 	try {
 		const pb = await getAdminPb();
 		const limits = await pb.collection('user_endpoint_limits').getFullList({
-			filter: `user = "${userId}"`
+			filter: pb.filter('user = {:userId}', { userId })
 		});
 		return limits.map(limit => ({
 			id: limit.id,

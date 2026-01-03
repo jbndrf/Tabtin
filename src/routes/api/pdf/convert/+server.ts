@@ -1,9 +1,13 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { convertPdfToImages, type PdfConversionOptions } from '$lib/server/pdf-converter';
+import { requireAuth } from '$lib/server/authorization';
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
+		// Security: Require authentication
+		requireAuth(locals);
+
 		const formData = await request.formData();
 		const pdfFile = formData.get('pdf') as File;
 		const optionsJson = formData.get('options') as string | null;

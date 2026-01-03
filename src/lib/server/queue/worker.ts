@@ -23,6 +23,7 @@ import {
 	type LlmEndpoint
 } from '../admin-auth';
 import { getInstanceLimits } from '../instance-config';
+import { validateExternalUrl } from '../url-validator';
 
 /** Per-request metric data for tracking individual LLM calls within a batch */
 interface RequestDetailData {
@@ -428,7 +429,7 @@ export class QueueWorker {
 
 			// Fetch images for batch
 			images = await this.pb.collection('images').getFullList({
-				filter: `batch = "${batchId}"`,
+				filter: this.pb.filter('batch = {:batchId}', { batchId }),
 				sort: '+order'
 			});
 
@@ -771,7 +772,7 @@ export class QueueWorker {
 		for (const batchId of batchIds) {
 			// Delete all existing extraction_rows for this batch using batch API
 			const existingRows = await this.pb.collection('extraction_rows').getFullList({
-				filter: `batch = "${batchId}"`
+				filter: this.pb.filter('batch = {:batchId}', { batchId })
 			});
 
 			if (existingRows.length > 0) {
@@ -847,13 +848,13 @@ export class QueueWorker {
 			try {
 				// First, let's see ALL extraction_rows for this batch
 				const allRows = await this.pb.collection('extraction_rows').getFullList({
-					filter: `batch ~ "${batchId}"`
+					filter: this.pb.filter('batch ~ {:batchId}', { batchId })
 				});
 				console.log(`[Redo] Found ${allRows.length} extraction_rows for batch ${batchId}:`);
 				allRows.forEach((r: any) => console.log(`[Redo]   - id=${r.id}, row_index=${r.row_index}, status=${r.status}`));
 
 				existingRow = await this.pb.collection('extraction_rows').getFirstListItem(
-					`batch ~ "${batchId}" && row_index = ${rowIndex}`
+					this.pb.filter('batch ~ {:batchId} && row_index = {:rowIndex}', { batchId, rowIndex })
 				);
 				console.log(`[Redo] Found extraction_row: ${existingRow.id}`);
 			} catch (queryErr: any) {
@@ -1525,7 +1526,13 @@ export class QueueWorker {
 			};
 		}
 
-		// Custom endpoint - use settings directly
+		// Custom endpoint - validate URL for SSRF protection
+		// Only user-provided endpoints need validation; managed endpoints are admin-configured
+		const urlValidation = await validateExternalUrl(settings.endpoint);
+		if (!urlValidation.allowed) {
+			throw new Error(`Invalid custom endpoint URL: ${urlValidation.reason}`);
+		}
+
 		return {
 			endpoint: settings.endpoint,
 			apiKey: settings.apiKey,

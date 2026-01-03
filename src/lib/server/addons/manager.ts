@@ -306,6 +306,16 @@ export class AddonManager {
 			throw new Error('Addon is not properly configured');
 		}
 
+		// Security: Validate endpoint to prevent URL injection attacks
+		// Endpoint must be a relative path starting with /
+		if (!endpoint.startsWith('/')) {
+			throw new Error('Endpoint must start with /');
+		}
+		// Block URL injection characters that could redirect to different hosts
+		if (endpoint.includes('@') || endpoint.includes('://') || endpoint.includes('\\')) {
+			throw new Error('Invalid endpoint path');
+		}
+
 		const url = `${addon.internal_url}${endpoint}`;
 		console.log(`[AddonManager] Calling addon endpoint: ${method} ${url}`);
 
@@ -351,7 +361,7 @@ export class AddonManager {
 		await this.authenticate();
 
 		const records = await this.pb.collection('installed_addons').getFullList({
-			filter: `user = "${userId}"`,
+			filter: this.pb.filter('user = {:userId}', { userId }),
 			sort: '-created'
 		});
 
@@ -381,7 +391,7 @@ export class AddonManager {
 			const requestKey = `getByManifestId_${manifestId}_${userId}_${Date.now()}`;
 
 			const records = await this.pb.collection('installed_addons').getFullList({
-				filter: `user = "${userId}"`,
+				filter: this.pb.filter('user = {:userId}', { userId }),
 				requestKey
 			});
 

@@ -1,6 +1,7 @@
 import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import PocketBase from 'pocketbase';
 import { redirect, type Handle } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import { startWorker } from '$lib/server/queue';
 import { runStartupTasks, initShutdownHandlers } from '$lib/server/startup';
 
@@ -87,7 +88,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const response = await resolve(event);
 
 	// Sync the auth state back to cookies
-	const pbCookie = event.locals.pb.authStore.exportToCookie({ httpOnly: false });
+	// Security: httpOnly prevents XSS from stealing session, secure ensures HTTPS only, sameSite prevents CSRF
+	const pbCookie = event.locals.pb.authStore.exportToCookie({
+		httpOnly: true,
+		secure: !dev,
+		sameSite: 'lax'
+	});
 
 	// Only set the cookie if it's not empty
 	if (pbCookie) {
