@@ -57,6 +57,8 @@ services:
     # Self-hosters: Uncomment to set fixed container name
     # container_name: sveltekit-frontend
     environment:
+      # Coolify Magic: This triggers Traefik routing to this service on port 80
+      - SERVICE_FQDN_FRONTEND
       # Internal: Docker environment detection (do not change)
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090

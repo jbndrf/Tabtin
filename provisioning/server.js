@@ -129,13 +129,13 @@ async function createInstance(username, password, email, tier) {
   const composeFile = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.yaml'), 'utf-8');
   const composeBase64 = Buffer.from(composeFile).toString('base64');
 
+  // Try different formats - Coolify API is picky about docker_compose_domains
+  // Format attempt: JSON object mapping service name to domain
   const domainResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
     docker_compose_raw: composeBase64,
-    docker_compose_domains: JSON.stringify({
-      frontend: {
-        domain: customDomain
-      }
-    })
+    docker_compose_domains: {
+      frontend: customDomain
+    }
   });
 
   if (domainResult.status !== 200 && domainResult.status !== 201) {
