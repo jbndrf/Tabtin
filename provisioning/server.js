@@ -125,15 +125,30 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Change docker_compose_location to use our Coolify template
-  const locationResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
-    docker_compose_location: '/docker-compose.coolify.yaml'
+  // Step 4: Set custom build/start commands to inject Traefik labels dynamically
+  // This generates a docker-compose.override.yaml with the correct domain at build time
+  const customBuildCommand = `cat > docker-compose.override.yaml << 'LABELS_EOF'
+services:
+  frontend:
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.frontend-${appUuid}.rule=Host(\\\`${customDomain}\\\`)"
+      - traefik.http.routers.frontend-${appUuid}.entryPoints=http
+      - traefik.http.services.frontend-${appUuid}.loadbalancer.server.port=80
+LABELS_EOF
+docker compose -f docker-compose.yaml -f docker-compose.override.yaml build`;
+
+  const customStartCommand = `docker compose -f docker-compose.yaml -f docker-compose.override.yaml up -d`;
+
+  const commandResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
+    docker_compose_custom_build_command: customBuildCommand,
+    docker_compose_custom_start_command: customStartCommand
   });
 
-  if (locationResult.status !== 200 && locationResult.status !== 201) {
-    console.warn(`Warning: Failed to set docker_compose_location: ${JSON.stringify(locationResult.data)}`);
+  if (commandResult.status !== 200 && commandResult.status !== 201) {
+    console.warn(`Warning: Failed to set custom commands: ${JSON.stringify(commandResult.data)}`);
   } else {
-    console.log('Set docker_compose_location to /docker-compose.coolify.yaml');
+    console.log('Set custom build/start commands for Traefik label injection');
   }
 
   console.log(`Configured for ${customDomain} (UUID: ${appUuid})`);
