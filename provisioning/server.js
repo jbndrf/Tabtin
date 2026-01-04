@@ -124,21 +124,14 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Inject Traefik labels into compose file via docker_compose_raw
-  // Docker Compose does NOT interpolate env vars in labels, so we bake in actual values
-  const composeFile = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.yaml'), 'utf-8');
+  // Step 4: Load Coolify compose template and replace placeholders
+  const composeTemplate = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.coolify.yaml'), 'utf-8');
 
-  const traefikLabels = `    labels:
-      - traefik.enable=true
-      - "traefik.http.routers.frontend-${appUuid}.rule=Host(\`${customDomain}\`)"
-      - traefik.http.routers.frontend-${appUuid}.entryPoints=http
-      - traefik.http.services.frontend-${appUuid}.loadbalancer.server.port=80`;
+  const modifiedCompose = composeTemplate
+    .replace(/__APP_UUID__/g, appUuid)
+    .replace(/__CUSTOM_DOMAIN__/g, customDomain);
 
-  // Insert labels after "# container_name: sveltekit-frontend" line
-  const modifiedCompose = composeFile.replace(
-    '# container_name: sveltekit-frontend\n    environment:',
-    `# container_name: sveltekit-frontend\n${traefikLabels}\n    environment:`
-  );
+  console.log(`Prepared compose file for ${customDomain} (UUID: ${appUuid})`);
 
   const composeBase64 = Buffer.from(modifiedCompose).toString('base64');
 

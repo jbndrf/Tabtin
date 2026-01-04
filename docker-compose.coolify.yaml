@@ -1,0 +1,86 @@
+version: '3.8'
+
+# ============================================================
+# Coolify Deployment Template
+# ============================================================
+# This file is used by the provisioning server to create new
+# Coolify instances. Placeholders are replaced at runtime:
+#   __APP_UUID__      -> Coolify application UUID
+#   __CUSTOM_DOMAIN__ -> Custom domain (e.g., user.tabtin.bndrf.de)
+#
+# For self-hosting, use docker-compose.yaml instead.
+# ============================================================
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:?}
+      - PB_BATCH_ENABLED=${PB_BATCH_ENABLED:-true}
+      - PB_BATCH_MAX_REQUESTS=${PB_BATCH_MAX_REQUESTS:-100}
+      - PB_BATCH_TIMEOUT=${PB_BATCH_TIMEOUT:-30}
+      - PB_BATCH_MAX_BODY_SIZE=${PB_BATCH_MAX_BODY_SIZE:-134217728}
+    volumes:
+      - ./data/pb_data:/pb/pb_data
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8090/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.frontend-__APP_UUID__.rule=Host(`__CUSTOM_DOMAIN__`)"
+      - traefik.http.routers.frontend-__APP_UUID__.entryPoints=http
+      - traefik.http.services.frontend-__APP_UUID__.loadbalancer.server.port=80
+    environment:
+      - DOCKER_ENV=true
+      - POCKETBASE_URL=http://backend:8090
+      - ADDON_NETWORK=tabtin-network
+      - ADDON_DATA_PATH=/app/addon-data
+      - ADDONS_DIR=/app/addons
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:?}
+      - INSTANCE_MAX_CONCURRENT_PROJECTS=${INSTANCE_MAX_CONCURRENT_PROJECTS:-1}
+      - INSTANCE_MAX_PARALLEL_REQUESTS=${INSTANCE_MAX_PARALLEL_REQUESTS:-10}
+      - INSTANCE_MAX_REQUESTS_PER_MINUTE=${INSTANCE_MAX_REQUESTS_PER_MINUTE:-60}
+      - PREDEFINED_ENDPOINTS=${PREDEFINED_ENDPOINTS:-[]}
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/addons:/app/addon-data
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  app-network:
+
+volumes:
+  nginx_cache:
