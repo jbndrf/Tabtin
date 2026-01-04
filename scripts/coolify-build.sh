@@ -19,6 +19,7 @@ services:
       - "traefik.http.routers.frontend-${APP_UUID}.rule=Host(\`${CUSTOM_DOMAIN}\`)"
       - traefik.http.routers.frontend-${APP_UUID}.entryPoints=http
       - traefik.http.services.frontend-${APP_UUID}.loadbalancer.server.port=80
+      - traefik.docker.network=${APP_UUID}
 EOF
 
 echo "Generated docker-compose.override.yaml:"
