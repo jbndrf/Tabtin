@@ -109,12 +109,10 @@ async function createInstance(username, password, email, tier) {
   console.log(`Created application: ${appUuid}`);
 
   // Step 3: Set environment variables
-  // SERVICE_FQDN_FRONTEND is a Coolify magic var that configures Traefik routing
   const customDomain = `${username}.tabtin.bndrf.de`;
   const envVars = {
     POCKETBASE_ADMIN_EMAIL: email,
     POCKETBASE_ADMIN_PASSWORD: password,
-    SERVICE_FQDN_FRONTEND: customDomain,
     ...tierConfig
   };
 
@@ -126,31 +124,32 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Set custom Traefik labels for routing
-  const traefikLabels = `traefik.enable=true
-traefik.http.middlewares.gzip.compress=true
-traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-traefik.http.routers.http-0-${appUuid}.entryPoints=http
-traefik.http.routers.http-0-${appUuid}.middlewares=redirect-to-https
-traefik.http.routers.http-0-${appUuid}.rule=Host(\`${customDomain}\`) && PathPrefix(\`/\`)
-traefik.http.routers.http-0-${appUuid}.service=http-0-${appUuid}
-traefik.http.routers.https-0-${appUuid}.entryPoints=https
-traefik.http.routers.https-0-${appUuid}.middlewares=gzip
-traefik.http.routers.https-0-${appUuid}.rule=Host(\`${customDomain}\`) && PathPrefix(\`/\`)
-traefik.http.routers.https-0-${appUuid}.service=https-0-${appUuid}
-traefik.http.routers.https-0-${appUuid}.tls=true
-traefik.http.routers.https-0-${appUuid}.tls.certresolver=letsencrypt
-traefik.http.services.http-0-${appUuid}.loadbalancer.server.port=80
-traefik.http.services.https-0-${appUuid}.loadbalancer.server.port=80`;
+  // Step 4: Inject Traefik labels into compose file via docker_compose_raw
+  // Docker Compose does NOT interpolate env vars in labels, so we bake in actual values
+  const composeFile = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.yaml'), 'utf-8');
 
-  const labelsResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
-    custom_labels: traefikLabels
+  const traefikLabels = `    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.frontend-${appUuid}.rule=Host(\`${customDomain}\`)"
+      - traefik.http.routers.frontend-${appUuid}.entryPoints=http
+      - traefik.http.services.frontend-${appUuid}.loadbalancer.server.port=80`;
+
+  // Insert labels after "# container_name: sveltekit-frontend" line
+  const modifiedCompose = composeFile.replace(
+    '# container_name: sveltekit-frontend\n    environment:',
+    `# container_name: sveltekit-frontend\n${traefikLabels}\n    environment:`
+  );
+
+  const composeBase64 = Buffer.from(modifiedCompose).toString('base64');
+
+  const composeResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
+    docker_compose_raw: composeBase64
   });
 
-  if (labelsResult.status !== 200 && labelsResult.status !== 201) {
-    console.warn(`Warning: Failed to set Traefik labels: ${JSON.stringify(labelsResult.data)}`);
+  if (composeResult.status !== 200 && composeResult.status !== 201) {
+    console.warn(`Warning: Failed to set compose with Traefik labels: ${JSON.stringify(composeResult.data)}`);
   } else {
-    console.log(`Set Traefik labels for ${customDomain}`);
+    console.log(`Injected Traefik labels for ${customDomain}`);
   }
 
   // Step 5: Deploy
@@ -160,7 +159,8 @@ traefik.http.services.https-0-${appUuid}.loadbalancer.server.port=80`;
   return {
     success: true,
     url: `https://${customDomain}`,
-    uuid: appUuid
+    uuid: appUuid,
+    note: 'Instance is deploying. May take a few minutes to be ready.'
   };
 }
 
