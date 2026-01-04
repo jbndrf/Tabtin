@@ -126,7 +126,34 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Deploy (domain is set via SERVICE_FQDN_FRONTEND env var)
+  // Step 4: Set custom Traefik labels for routing
+  const traefikLabels = `traefik.enable=true
+traefik.http.middlewares.gzip.compress=true
+traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+traefik.http.routers.http-0-${appUuid}.entryPoints=http
+traefik.http.routers.http-0-${appUuid}.middlewares=redirect-to-https
+traefik.http.routers.http-0-${appUuid}.rule=Host(\`${customDomain}\`) && PathPrefix(\`/\`)
+traefik.http.routers.http-0-${appUuid}.service=http-0-${appUuid}
+traefik.http.routers.https-0-${appUuid}.entryPoints=https
+traefik.http.routers.https-0-${appUuid}.middlewares=gzip
+traefik.http.routers.https-0-${appUuid}.rule=Host(\`${customDomain}\`) && PathPrefix(\`/\`)
+traefik.http.routers.https-0-${appUuid}.service=https-0-${appUuid}
+traefik.http.routers.https-0-${appUuid}.tls=true
+traefik.http.routers.https-0-${appUuid}.tls.certresolver=letsencrypt
+traefik.http.services.http-0-${appUuid}.loadbalancer.server.port=80
+traefik.http.services.https-0-${appUuid}.loadbalancer.server.port=80`;
+
+  const labelsResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
+    custom_labels: traefikLabels
+  });
+
+  if (labelsResult.status !== 200 && labelsResult.status !== 201) {
+    console.warn(`Warning: Failed to set Traefik labels: ${JSON.stringify(labelsResult.data)}`);
+  } else {
+    console.log(`Set Traefik labels for ${customDomain}`);
+  }
+
+  // Step 5: Deploy
   await coolifyRequest(`/applications/${appUuid}/start`, 'POST');
   console.log('Deployment started');
 

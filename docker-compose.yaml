@@ -56,15 +56,7 @@ services:
       dockerfile: Dockerfile.frontend
     # Self-hosters: Uncomment to set fixed container name
     # container_name: sveltekit-frontend
-    # Traefik labels for Coolify routing
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.frontend-${COOLIFY_RESOURCE_UUID:-local}.rule=Host(`${SERVICE_FQDN_FRONTEND:-localhost}`)
-      - traefik.http.routers.frontend-${COOLIFY_RESOURCE_UUID:-local}.entryPoints=http
-      - traefik.http.services.frontend-${COOLIFY_RESOURCE_UUID:-local}.loadbalancer.server.port=80
     environment:
-      # Coolify Magic: This sets the domain for Traefik routing
-      - SERVICE_FQDN_FRONTEND
       # Internal: Docker environment detection (do not change)
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090
