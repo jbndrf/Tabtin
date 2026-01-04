@@ -29,8 +29,8 @@ export interface AppSettings {
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
 	id: APP_SETTINGS_ID,
-	allow_registration: true,
-	require_email_verification: false,
+	allow_registration: false,
+	require_email_verification: true,
 	allow_custom_endpoints: true
 };
 

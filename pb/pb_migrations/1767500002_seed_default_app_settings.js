@@ -1,11 +1,12 @@
 /// <reference path="../pb_data/types.d.ts" />
 migrate((app) => {
   const collection = app.findCollectionByNameOrId("app_settings");
+  const SETTINGS_ID = "app_settings_singleton";
 
   // Check if a settings record already exists
   let existingRecord;
   try {
-    existingRecord = app.findFirstRecordByFilter("app_settings", "id = 'default'");
+    existingRecord = app.findFirstRecordByFilter("app_settings", `id = '${SETTINGS_ID}'`);
   } catch (e) {
     // Record doesn't exist, that's expected for fresh installs
   }
@@ -15,7 +16,7 @@ migrate((app) => {
     // - Registration disabled (admin must enable)
     // - Email verification required
     const record = new Record(collection);
-    record.set("id", "default");
+    record.set("id", SETTINGS_ID);
     record.set("allow_registration", false);
     record.set("require_email_verification", true);
     record.set("allow_custom_endpoints", false);
@@ -25,8 +26,9 @@ migrate((app) => {
   }
 }, (app) => {
   // Rollback: delete the default settings record
+  const SETTINGS_ID = "app_settings_singleton";
   try {
-    const record = app.findFirstRecordByFilter("app_settings", "id = 'default'");
+    const record = app.findFirstRecordByFilter("app_settings", `id = '${SETTINGS_ID}'`);
     if (record) {
       app.delete(record);
     }

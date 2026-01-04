@@ -20,9 +20,9 @@
 	let error = $state<string | null>(null);
 	let success = $state<string | null>(null);
 
-	// Local form state
-	let allowRegistration = $state(true);
-	let requireEmailVerification = $state(false);
+	// Local form state (defaults match secure server defaults)
+	let allowRegistration = $state(false);
+	let requireEmailVerification = $state(true);
 	let allowCustomEndpoints = $state(true);
 
 	async function loadSettings() {
@@ -35,8 +35,8 @@
 			}
 			const data = await res.json();
 			settings = data.settings;
-			allowRegistration = settings?.allow_registration ?? true;
-			requireEmailVerification = settings?.require_email_verification ?? false;
+			allowRegistration = settings?.allow_registration ?? false;
+			requireEmailVerification = settings?.require_email_verification ?? true;
 			allowCustomEndpoints = settings?.allow_custom_endpoints ?? true;
 		} catch (e: any) {
 			error = e.message;
