@@ -124,7 +124,18 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Load Coolify compose template and replace placeholders
+  // Step 4: Change docker_compose_location to use our Coolify template
+  const locationResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
+    docker_compose_location: '/docker-compose.coolify.yaml'
+  });
+
+  if (locationResult.status !== 200 && locationResult.status !== 201) {
+    console.warn(`Warning: Failed to set docker_compose_location: ${JSON.stringify(locationResult.data)}`);
+  } else {
+    console.log('Set docker_compose_location to /docker-compose.coolify.yaml');
+  }
+
+  // Step 5: Load Coolify compose template and replace placeholders
   const composeTemplate = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.coolify.yaml'), 'utf-8');
 
   const modifiedCompose = composeTemplate
@@ -145,7 +156,7 @@ async function createInstance(username, password, email, tier) {
     console.log(`Injected Traefik labels for ${customDomain}`);
   }
 
-  // Step 5: Deploy
+  // Step 6: Deploy
   await coolifyRequest(`/applications/${appUuid}/start`, 'POST');
   console.log('Deployment started');
 

@@ -1,18 +1,22 @@
 // API endpoint to get batch-level metrics with per-request details
 
-import { json } from '@sveltejs/kit';
-import PocketBase from 'pocketbase';
-import { POCKETBASE_URL } from '$lib/config/pocketbase';
+import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async ({ url, locals }) => {
 	try {
+		// Require authentication
+		if (!locals.user) {
+			throw error(401, 'Authentication required');
+		}
+
 		const projectId = url.searchParams.get('projectId');
 		const timeRange = url.searchParams.get('timeRange') || '24h';
 		const page = parseInt(url.searchParams.get('page') || '1');
 		const perPage = parseInt(url.searchParams.get('perPage') || '50');
 
-		const pb = new PocketBase(POCKETBASE_URL);
+		// Use user's authenticated PocketBase client
+		const pb = locals.pb;
 
 		// Calculate time filter
 		let timeFilter = '';

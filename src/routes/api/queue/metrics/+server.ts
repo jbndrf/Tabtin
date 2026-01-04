@@ -1,20 +1,20 @@
 // API endpoint to get processing metrics and statistics
 
-import { json } from '@sveltejs/kit';
-import PocketBase from 'pocketbase';
-import { POCKETBASE_URL } from '$lib/config/pocketbase';
-import { requireAdmin } from '$lib/server/admin-auth';
+import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
 	try {
-		// Security: Admin only - exposes aggregate processing statistics
-		requireAdmin(locals);
+		// Require authentication
+		if (!locals.user) {
+			throw error(401, 'Authentication required');
+		}
 
 		const projectId = url.searchParams.get('projectId');
 		const timeRange = url.searchParams.get('timeRange') || '24h'; // 24h, 7d, 30d, all
 
-		const pb = new PocketBase(POCKETBASE_URL);
+		// Use user's authenticated PocketBase client
+		const pb = locals.pb;
 
 		// Calculate time filter
 		// PocketBase requires datetime format with space instead of 'T'
