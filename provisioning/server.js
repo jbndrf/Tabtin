@@ -109,9 +109,12 @@ async function createInstance(username, password, email, tier) {
   console.log(`Created application: ${appUuid}`);
 
   // Step 3: Set environment variables
+  // SERVICE_FQDN_FRONTEND is a Coolify magic var that configures Traefik routing
+  const customDomain = `${username}.tabtin.bndrf.de`;
   const envVars = {
     POCKETBASE_ADMIN_EMAIL: email,
     POCKETBASE_ADMIN_PASSWORD: password,
+    SERVICE_FQDN_FRONTEND: customDomain,
     ...tierConfig
   };
 
@@ -123,34 +126,13 @@ async function createInstance(username, password, email, tier) {
   }
   console.log('Set environment variables');
 
-  // Step 4: Set domain for frontend service
-  // Coolify requires docker_compose_raw when setting docker_compose_domains
-  const customDomain = `https://${username}.tabtin.bndrf.de`;
-  const composeFile = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.yaml'), 'utf-8');
-  const composeBase64 = Buffer.from(composeFile).toString('base64');
-
-  // Try different formats - Coolify API is picky about docker_compose_domains
-  // Format attempt: JSON object mapping service name to domain
-  const domainResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
-    docker_compose_raw: composeBase64,
-    docker_compose_domains: {
-      frontend: customDomain
-    }
-  });
-
-  if (domainResult.status !== 200 && domainResult.status !== 201) {
-    console.warn(`Warning: Failed to set domain: ${JSON.stringify(domainResult.data)}`);
-  } else {
-    console.log(`Set domain: ${customDomain}`);
-  }
-
-  // Step 5: Deploy
+  // Step 4: Deploy (domain is set via SERVICE_FQDN_FRONTEND env var)
   await coolifyRequest(`/applications/${appUuid}/start`, 'POST');
   console.log('Deployment started');
 
   return {
     success: true,
-    url: `https://${username}.tabtin.bndrf.de`,
+    url: `https://${customDomain}`,
     uuid: appUuid
   };
 }
