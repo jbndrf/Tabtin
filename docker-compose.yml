@@ -24,7 +24,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: pocketbase-backend
+    # Self-hosters: Uncomment to set fixed container name
+    # container_name: pocketbase-backend
     environment:
       # Required: Admin credentials for first-run setup
       - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
@@ -36,8 +37,9 @@ services:
       - PB_BATCH_MAX_BODY_SIZE=${PB_BATCH_MAX_BODY_SIZE:-134217728}
     volumes:
       - ./data/pb_data:/pb/pb_data
-    ports:
-      - "8090:8090"
+    # Self-hosters: Uncomment to expose PocketBase directly (for admin UI access)
+    # ports:
+    #   - "8090:8090"
     networks:
       - app-network
     restart: unless-stopped
@@ -52,7 +54,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: sveltekit-frontend
+    # Self-hosters: Uncomment to set fixed container name
+    # container_name: sveltekit-frontend
     environment:
       # Internal: Docker environment detection (do not change)
       - DOCKER_ENV=true
@@ -75,8 +78,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/addons:/app/addon-data
       - nginx_cache:/var/cache/nginx
-    ports:
-      - "80:80"
+    # Self-hosters: Uncomment to expose on port 80 directly
+    # ports:
+    #   - "80:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -99,13 +103,14 @@ services:
 
 networks:
   app-network:
-    name: tabtin-network
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: br-app
-    ipam:
-      config:
-        - subnet: 172.27.0.0/16
+    # Self-hosters: Uncomment for custom network config
+    # name: tabtin-network
+    # driver: bridge
+    # driver_opts:
+    #   com.docker.network.bridge.name: br-app
+    # ipam:
+    #   config:
+    #     - subnet: 172.27.0.0/16
 
 volumes:
   nginx_cache:

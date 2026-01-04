@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tabtin Provisioning - Proof of Concept</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 500px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+      color: #fff;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #aaa;
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #0f0f23;
+      color: #fff;
+      font-size: 16px;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #4a9eff;
+    }
+
+    .tier-selection {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+
+    .tier-card {
+      border: 2px solid #333;
+      border-radius: 12px;
+      padding: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .tier-card:hover {
+      border-color: #555;
+    }
+
+    .tier-card.selected {
+      border-color: #4a9eff;
+      background: rgba(74, 158, 255, 0.1);
+    }
+
+    .tier-card h3 {
+      margin-bottom: 8px;
+    }
+
+    .tier-card .price {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    .tier-card.free .price { color: #4ade80; }
+    .tier-card.paid .price { color: #f59e0b; }
+
+    .tier-card ul {
+      list-style: none;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .tier-card li {
+      margin: 4px 0;
+    }
+
+    input[type="radio"] {
+      display: none;
+    }
+
+    button {
+      width: 100%;
+      padding: 16px;
+      background: #4a9eff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #3a8eef;
+    }
+
+    button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 8px;
+      display: none;
+    }
+
+    .result.success {
+      background: rgba(74, 222, 128, 0.1);
+      border: 1px solid #4ade80;
+      display: block;
+    }
+
+    .result.error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid #ef4444;
+      display: block;
+    }
+
+    .result a {
+      color: #4a9eff;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .loading.show {
+      display: block;
+    }
+
+    .spinner {
+      border: 3px solid #333;
+      border-top: 3px solid #4a9eff;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .domain-preview {
+      font-size: 12px;
+      color: #4a9eff;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Tabtin</h1>
+    <p class="subtitle">Provision New Instance - Proof of Concept</p>
+
+    <form id="provisionForm">
+      <div class="form-group">
+        <label for="username">Username (subdomain)</label>
+        <input type="text" id="username" name="username" placeholder="mycompany" required pattern="[a-z0-9\-]+" />
+        <div class="domain-preview" id="domainPreview"></div>
+      </div>
+
+      <div class="form-group">
+        <label for="email">Admin Email</label>
+        <input type="email" id="email" name="email" placeholder="admin@example.com" required />
+      </div>
+
+      <div class="form-group">
+        <label for="password">Admin Password</label>
+        <input type="password" id="password" name="password" placeholder="Secure password" required minlength="8" />
+      </div>
+
+      <label>Select Tier</label>
+      <div class="tier-selection">
+        <label class="tier-card free selected" data-tier="free">
+          <input type="radio" name="tier" value="free" checked />
+          <h3>Free</h3>
+          <div class="price">$0</div>
+          <ul>
+            <li>1 concurrent project</li>
+            <li>5 parallel requests</li>
+            <li>30 req/min limit</li>
+          </ul>
+        </label>
+
+        <label class="tier-card paid" data-tier="paid">
+          <input type="radio" name="tier" value="paid" />
+          <h3>Pro</h3>
+          <div class="price">$29</div>
+          <ul>
+            <li>10 concurrent projects</li>
+            <li>50 parallel requests</li>
+            <li>300 req/min limit</li>
+          </ul>
+        </label>
+      </div>
+
+      <button type="submit" id="submitBtn">Create Instance</button>
+    </form>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Creating your instance...</p>
+    </div>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('provisionForm');
+    const usernameInput = document.getElementById('username');
+    const domainPreview = document.getElementById('domainPreview');
+    const tierCards = document.querySelectorAll('.tier-card');
+    const loading = document.getElementById('loading');
+    const result = document.getElementById('result');
+    const submitBtn = document.getElementById('submitBtn');
+
+    // Update domain preview
+    usernameInput.addEventListener('input', () => {
+      const value = usernameInput.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+      usernameInput.value = value;
+      domainPreview.textContent = value ? `${value}.tabtin.bndrf.de` : '';
+    });
+
+    // Tier selection
+    tierCards.forEach(card => {
+      card.addEventListener('click', () => {
+        tierCards.forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        card.querySelector('input[type="radio"]').checked = true;
+      });
+    });
+
+    // Form submission
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const formData = {
+        username: usernameInput.value,
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+        tier: document.querySelector('input[name="tier"]:checked').value
+      };
+
+      submitBtn.disabled = true;
+      loading.classList.add('show');
+      result.className = 'result';
+      result.style.display = 'none';
+
+      try {
+        const response = await fetch('/provision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          result.className = 'result success';
+          result.innerHTML = `
+            <strong>Instance Created!</strong><br><br>
+            Your Tabtin instance is being deployed.<br><br>
+            URL: <a href="${data.url}" target="_blank">${data.url}</a><br>
+            <small>It may take a few minutes to be ready.</small>
+          `;
+        } else {
+          throw new Error(data.error || 'Unknown error');
+        }
+      } catch (error) {
+        result.className = 'result error';
+        result.innerHTML = `<strong>Error:</strong> ${error.message}`;
+      } finally {
+        submitBtn.disabled = false;
+        loading.classList.remove('show');
+      }
+    });
+  </script>
+</body>
+</html>
