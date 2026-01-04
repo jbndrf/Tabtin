@@ -25,4 +25,5 @@ echo "Generated docker-compose.override.yaml:"
 cat docker-compose.override.yaml
 
 echo "Running docker compose build..."
-docker compose -f docker-compose.yaml -f docker-compose.override.yaml build
+# Use Coolify's build-time.env file which contains all the environment variables
+docker compose --env-file /artifacts/build-time.env -f docker-compose.yaml -f docker-compose.override.yaml build

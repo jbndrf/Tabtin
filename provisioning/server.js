@@ -128,7 +128,7 @@ async function createInstance(username, password, email, tier) {
   // Step 4: Set custom build/start commands to inject Traefik labels dynamically
   // Use a build script that's part of the repo - simpler and avoids API escaping issues
   const customBuildCommand = `CUSTOM_DOMAIN=${customDomain} APP_UUID=${appUuid} sh ./scripts/coolify-build.sh`;
-  const customStartCommand = `docker compose -f docker-compose.yaml -f docker-compose.override.yaml up -d`;
+  const customStartCommand = `docker compose --env-file /artifacts/build-time.env -f docker-compose.yaml -f docker-compose.override.yaml up -d`;
 
   const commandResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
     docker_compose_custom_build_command: customBuildCommand,
