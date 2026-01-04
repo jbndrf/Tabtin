@@ -34,30 +34,9 @@ const TIERS = {
   }
 };
 
-// Predefined LLM endpoints for all instances
+// Predefined LLM endpoints for all instances (as raw JSON string to avoid double-escaping)
 // These are synced to the database on startup, admin can enable/disable but not delete
-const PREDEFINED_ENDPOINTS = [
-  {
-    alias: 'Qwen3-VL-8B',
-    endpoint: 'http://192.168.1.47:8001/v1/chat/completions',
-    apiKey: 'sk-anykey',
-    model: 'unsloth/Qwen3-VL-8B-Instruct-FP8',
-    maxInputTokensPerDay: 10000000,
-    maxOutputTokensPerDay: 2000000,
-    description: 'Local Qwen3 VL 8B - Higher quality',
-    providerType: 'openai'
-  },
-  {
-    alias: 'Qwen3-VL-4B',
-    endpoint: 'http://192.168.1.47:8002/v1/chat/completions',
-    apiKey: 'sk-anykey',
-    model: 'unsloth/Qwen3-VL-4B-Instruct-FP8',
-    maxInputTokensPerDay: 10000000,
-    maxOutputTokensPerDay: 2000000,
-    description: 'Local Qwen3 VL 4B - Faster processing',
-    providerType: 'openai'
-  }
-];
+const PREDEFINED_ENDPOINTS_JSON = '[{"alias":"Qwen3-VL-8B","endpoint":"http://192.168.1.47:8001/v1/chat/completions","apiKey":"sk-anykey","model":"unsloth/Qwen3-VL-8B-Instruct-FP8","maxInputTokensPerDay":10000000,"maxOutputTokensPerDay":2000000,"description":"Local Qwen3 VL 8B - Higher quality","providerType":"openai"},{"alias":"Qwen3-VL-4B","endpoint":"http://192.168.1.47:8002/v1/chat/completions","apiKey":"sk-anykey","model":"unsloth/Qwen3-VL-4B-Instruct-FP8","maxInputTokensPerDay":10000000,"maxOutputTokensPerDay":2000000,"description":"Local Qwen3 VL 4B - Faster processing","providerType":"openai"}]';
 
 async function coolifyRequest(endpoint, method = 'GET', body = null) {
   const url = new URL(`/api/v1${endpoint}`, COOLIFY_URL);
@@ -139,8 +118,7 @@ async function createInstance(username, password, email, tier) {
     POCKETBASE_ADMIN_EMAIL: email,
     POCKETBASE_ADMIN_PASSWORD: password,
     CUSTOM_DOMAIN: customDomain,
-    // JSON.stringify handles all escaping - Coolify stores it as a string
-    PREDEFINED_ENDPOINTS: JSON.stringify(PREDEFINED_ENDPOINTS),
+    PREDEFINED_ENDPOINTS: PREDEFINED_ENDPOINTS_JSON,
     ...tierConfig
   };
 
