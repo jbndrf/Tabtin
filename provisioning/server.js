@@ -113,6 +113,7 @@ async function createInstance(username, password, email, tier) {
   const envVars = {
     POCKETBASE_ADMIN_EMAIL: email,
     POCKETBASE_ADMIN_PASSWORD: password,
+    CUSTOM_DOMAIN: customDomain,
     ...tierConfig
   };
 
@@ -135,28 +136,9 @@ async function createInstance(username, password, email, tier) {
     console.log('Set docker_compose_location to /docker-compose.coolify.yaml');
   }
 
-  // Step 5: Load Coolify compose template and replace placeholders
-  const composeTemplate = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.coolify.yaml'), 'utf-8');
+  console.log(`Configured for ${customDomain} (UUID: ${appUuid})`);
 
-  const modifiedCompose = composeTemplate
-    .replace(/__APP_UUID__/g, appUuid)
-    .replace(/__CUSTOM_DOMAIN__/g, customDomain);
-
-  console.log(`Prepared compose file for ${customDomain} (UUID: ${appUuid})`);
-
-  const composeBase64 = Buffer.from(modifiedCompose).toString('base64');
-
-  const composeResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
-    docker_compose_raw: composeBase64
-  });
-
-  if (composeResult.status !== 200 && composeResult.status !== 201) {
-    console.warn(`Warning: Failed to set compose with Traefik labels: ${JSON.stringify(composeResult.data)}`);
-  } else {
-    console.log(`Injected Traefik labels for ${customDomain}`);
-  }
-
-  // Step 6: Deploy
+  // Step 5: Deploy
   await coolifyRequest(`/applications/${appUuid}/start`, 'POST');
   console.log('Deployment started');
 

@@ -1,6 +1,7 @@
 // API endpoint to get batch-level metrics with per-request details
 
 import { json, error } from '@sveltejs/kit';
+import { getAdminPb } from '$lib/server/admin-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -15,8 +16,37 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		const page = parseInt(url.searchParams.get('page') || '1');
 		const perPage = parseInt(url.searchParams.get('perPage') || '50');
 
-		// Use user's authenticated PocketBase client
-		const pb = locals.pb;
+		// Use admin PB to access metrics (collection is admin-only)
+		const pb = await getAdminPb();
+
+		// Get user's project IDs for filtering
+		const userProjects = await locals.pb.collection('projects').getFullList({
+			fields: 'id'
+		});
+		const userProjectIds = userProjects.map((p) => p.id);
+
+		// If user has no projects, return empty result
+		if (userProjectIds.length === 0) {
+			return json({
+				success: true,
+				batches: [],
+				summary: {
+					totalBatches: 0,
+					totalInputTokens: 0,
+					totalOutputTokens: 0,
+					totalRequests: 0,
+					successCount: 0,
+					failedCount: 0
+				},
+				pagination: {
+					page: 1,
+					perPage,
+					totalPages: 0,
+					totalItems: 0
+				},
+				timeRange
+			});
+		}
 
 		// Calculate time filter
 		let timeFilter = '';
@@ -36,10 +66,19 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			timeFilter = `created >= "${pastTime.toISOString().replace('T', ' ')}"`;
 		}
 
-		// Build filter
+		// Build filter - only show metrics for user's projects
 		let filter = timeFilter;
+
+		// If specific project requested, verify user owns it
 		if (projectId) {
+			if (!userProjectIds.includes(projectId)) {
+				throw error(403, 'Access denied to this project');
+			}
 			filter = filter ? `${filter} && projectId = "${projectId}"` : `projectId = "${projectId}"`;
+		} else {
+			// Filter to only user's projects
+			const projectFilter = userProjectIds.map((id) => `projectId = "${id}"`).join(' || ');
+			filter = filter ? `${filter} && (${projectFilter})` : `(${projectFilter})`;
 		}
 
 		// Fetch paginated metrics
@@ -97,14 +136,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			},
 			timeRange
 		});
-	} catch (error: any) {
-		console.error('Error fetching batch metrics:', error);
+	} catch (err: any) {
+		console.error('Error fetching batch metrics:', err);
 		return json(
 			{
 				success: false,
-				error: error.message
+				error: err.message
 			},
-			{ status: 500 }
+			{ status: err.status || 500 }
 		);
 	}
 };

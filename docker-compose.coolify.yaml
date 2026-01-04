@@ -3,10 +3,10 @@ version: '3.8'
 # ============================================================
 # Coolify Deployment Template
 # ============================================================
-# This file is used by the provisioning server to create new
-# Coolify instances. Placeholders are replaced at runtime:
-#   __APP_UUID__      -> Coolify application UUID
-#   __CUSTOM_DOMAIN__ -> Custom domain (e.g., user.tabtin.bndrf.de)
+# This file is used for Coolify deployments. It uses Coolify's
+# built-in variable interpolation:
+#   ${COOLIFY_RESOURCE_UUID} -> Auto-provided by Coolify
+#   ${CUSTOM_DOMAIN}         -> Set by provisioning server
 #
 # For self-hosting, use docker-compose.yaml instead.
 # ============================================================
@@ -41,9 +41,9 @@ services:
       dockerfile: Dockerfile.frontend
     labels:
       - traefik.enable=true
-      - "traefik.http.routers.frontend-__APP_UUID__.rule=Host(`__CUSTOM_DOMAIN__`)"
-      - traefik.http.routers.frontend-__APP_UUID__.entryPoints=http
-      - traefik.http.services.frontend-__APP_UUID__.loadbalancer.server.port=80
+      - "traefik.http.routers.frontend-${COOLIFY_RESOURCE_UUID}.rule=Host(`${CUSTOM_DOMAIN}`)"
+      - traefik.http.routers.frontend-${COOLIFY_RESOURCE_UUID}.entryPoints=http
+      - traefik.http.services.frontend-${COOLIFY_RESOURCE_UUID}.loadbalancer.server.port=80
     environment:
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090

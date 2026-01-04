@@ -1,6 +1,7 @@
 // API endpoint to get processing metrics and statistics
 
 import { json, error } from '@sveltejs/kit';
+import { getAdminPb } from '$lib/server/admin-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -13,8 +14,45 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		const projectId = url.searchParams.get('projectId');
 		const timeRange = url.searchParams.get('timeRange') || '24h'; // 24h, 7d, 30d, all
 
-		// Use user's authenticated PocketBase client
-		const pb = locals.pb;
+		// Use admin PB to access metrics (collection is admin-only)
+		const pb = await getAdminPb();
+
+		// Get user's project IDs for filtering
+		const userProjects = await locals.pb.collection('projects').getFullList({
+			fields: 'id'
+		});
+		const userProjectIds = userProjects.map((p) => p.id);
+
+		// If user has no projects, return empty stats
+		if (userProjectIds.length === 0) {
+			return json({
+				success: true,
+				stats: {
+					total: 0,
+					successful: 0,
+					failed: 0,
+					successRate: 0,
+					averageDuration: 0,
+					minDuration: 0,
+					maxDuration: 0,
+					totalImages: 0,
+					totalExtractions: 0,
+					averageExtractionsPerBatch: 0,
+					totalTokens: 0,
+					totalInputTokens: 0,
+					totalOutputTokens: 0,
+					averageTokensPerBatch: 0,
+					averageInputTokensPerBatch: 0,
+					averageOutputTokensPerBatch: 0,
+					batchProcessing: 0,
+					redoProcessing: 0,
+					modelUsage: {},
+					hourlyBreakdown: null,
+					recentMetrics: []
+				},
+				timeRange
+			});
+		}
 
 		// Calculate time filter
 		// PocketBase requires datetime format with space instead of 'T'
@@ -31,10 +69,19 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			timeFilter = `created >= "${past30d.toISOString().replace('T', ' ')}"`;
 		}
 
-		// Build filter
+		// Build filter - only show metrics for user's projects
 		let filter = timeFilter;
+
+		// If specific project requested, verify user owns it
 		if (projectId) {
+			if (!userProjectIds.includes(projectId)) {
+				throw error(403, 'Access denied to this project');
+			}
 			filter = filter ? `${filter} && projectId = "${projectId}"` : `projectId = "${projectId}"`;
+		} else {
+			// Filter to only user's projects
+			const projectFilter = userProjectIds.map((id) => `projectId = "${id}"`).join(' || ');
+			filter = filter ? `${filter} && (${projectFilter})` : `(${projectFilter})`;
 		}
 
 		// Fetch all metrics
@@ -142,14 +189,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			stats,
 			timeRange
 		});
-	} catch (error: any) {
-		console.error('Error fetching metrics:', error);
+	} catch (err: any) {
+		console.error('Error fetching metrics:', err);
 		return json(
 			{
 				success: false,
-				error: error.message
+				error: err.message
 			},
-			{ status: 500 }
+			{ status: err.status || 500 }
 		);
 	}
 };
