@@ -126,18 +126,8 @@ async function createInstance(username, password, email, tier) {
   console.log('Set environment variables');
 
   // Step 4: Set custom build/start commands to inject Traefik labels dynamically
-  // This generates a docker-compose.override.yaml with the correct domain at build time
-  const customBuildCommand = `cat > docker-compose.override.yaml << 'LABELS_EOF'
-services:
-  frontend:
-    labels:
-      - traefik.enable=true
-      - "traefik.http.routers.frontend-${appUuid}.rule=Host(\\\`${customDomain}\\\`)"
-      - traefik.http.routers.frontend-${appUuid}.entryPoints=http
-      - traefik.http.services.frontend-${appUuid}.loadbalancer.server.port=80
-LABELS_EOF
-docker compose -f docker-compose.yaml -f docker-compose.override.yaml build`;
-
+  // Use a build script that's part of the repo - simpler and avoids API escaping issues
+  const customBuildCommand = `CUSTOM_DOMAIN=${customDomain} APP_UUID=${appUuid} sh ./scripts/coolify-build.sh`;
   const customStartCommand = `docker compose -f docker-compose.yaml -f docker-compose.override.yaml up -d`;
 
   const commandResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
