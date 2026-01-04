@@ -10,8 +10,8 @@ export BODY_SIZE_LIMIT="${BODY_SIZE_LIMIT:-50M}"
 node build/index.js &
 NODE_PID=$!
 
-# Start nginx in background
-nginx &
+# Start nginx in background (daemon off keeps it in foreground so we can track the PID)
+nginx -g 'daemon off;' &
 NGINX_PID=$!
 
 echo "Started Node.js (PID: $NODE_PID) and nginx (PID: $NGINX_PID)"
