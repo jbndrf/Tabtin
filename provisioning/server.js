@@ -1,9 +1,14 @@
 // Simple provisioning server - Proof of Concept
 // Run: node provisioning/server.js
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 const PORT = 3333;
 
@@ -84,7 +89,6 @@ async function createInstance(username, password, email, tier) {
   console.log(`Created environment: ${environmentName}`);
 
   // Step 2: Create application in the new environment
-  // Note: This is a simplified example - actual implementation depends on your setup
   const appResult = await coolifyRequest('/applications/private-deploy-key', 'POST', {
     project_uuid: PROJECT_UUID,
     server_uuid: SERVER_UUID,
@@ -93,7 +97,8 @@ async function createInstance(username, password, email, tier) {
     git_repository: GIT_REPO,
     git_branch: 'main',
     build_pack: 'dockercompose',
-    ports_exposes: '80'
+    ports_exposes: '80',
+    name: username
   });
 
   if (appResult.status !== 201 && appResult.status !== 200) {
@@ -113,14 +118,34 @@ async function createInstance(username, password, email, tier) {
   for (const [key, value] of Object.entries(envVars)) {
     await coolifyRequest(`/applications/${appUuid}/envs`, 'POST', {
       key,
-      value,
-      is_build_time: false
+      value
     });
   }
   console.log('Set environment variables');
 
-  // Step 4: Deploy
-  await coolifyRequest(`/deploy?uuid=${appUuid}`, 'POST', { force: true });
+  // Step 4: Set domain for frontend service
+  // Coolify requires docker_compose_raw when setting docker_compose_domains
+  const customDomain = `https://${username}.tabtin.bndrf.de`;
+  const composeFile = fs.readFileSync(path.join(PROJECT_ROOT, 'docker-compose.yaml'), 'utf-8');
+  const composeBase64 = Buffer.from(composeFile).toString('base64');
+
+  const domainResult = await coolifyRequest(`/applications/${appUuid}`, 'PATCH', {
+    docker_compose_raw: composeBase64,
+    docker_compose_domains: JSON.stringify({
+      frontend: {
+        domain: customDomain
+      }
+    })
+  });
+
+  if (domainResult.status !== 200 && domainResult.status !== 201) {
+    console.warn(`Warning: Failed to set domain: ${JSON.stringify(domainResult.data)}`);
+  } else {
+    console.log(`Set domain: ${customDomain}`);
+  }
+
+  // Step 5: Deploy
+  await coolifyRequest(`/applications/${appUuid}/start`, 'POST');
   console.log('Deployment started');
 
   return {
