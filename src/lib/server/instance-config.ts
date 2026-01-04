@@ -48,7 +48,16 @@ export function getPredefinedEndpoints(): PredefinedEndpoint[] {
 	if (!env.PREDEFINED_ENDPOINTS) return [];
 
 	try {
-		const parsed = JSON.parse(env.PREDEFINED_ENDPOINTS);
+		// Coolify escapes quotes in env vars for shell safety, so we need to unescape
+		// The value comes as [{"alias":\"...\"} instead of [{"alias":"..."}
+		let value = env.PREDEFINED_ENDPOINTS;
+
+		// If the value starts with escaped quotes, unescape them
+		if (value.includes('\\"')) {
+			value = value.replace(/\\"/g, '"');
+		}
+
+		const parsed = JSON.parse(value);
 		if (!Array.isArray(parsed)) {
 			console.error('[Config] PREDEFINED_ENDPOINTS must be a JSON array');
 			return [];
