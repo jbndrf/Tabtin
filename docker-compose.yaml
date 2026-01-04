@@ -54,6 +54,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.frontend-qo400kw88cg4gk40occ08wgo.rule=Host(`dkopf8.tabtin.bndrf.de`)"
+      - traefik.http.routers.frontend-qo400kw88cg4gk40occ08wgo.entryPoints=http
+      - traefik.http.services.frontend-qo400kw88cg4gk40occ08wgo.loadbalancer.server.port=80
     # Self-hosters: Uncomment to set fixed container name
     # container_name: sveltekit-frontend
     environment:
