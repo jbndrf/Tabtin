@@ -1,13 +1,39 @@
 version: '3.8'
 
+# ============================================================
+# Environment Variables (Coolify + Self-Hosters)
+# ============================================================
+# Coolify: Variables with ${VAR} syntax are auto-detected and shown in UI
+# Self-hosters: Create .env file from .env.example, docker-compose reads it
+#
+# Required variables (marked with :?):
+#   - POCKETBASE_ADMIN_EMAIL
+#   - POCKETBASE_ADMIN_PASSWORD
+#
+# Optional variables (have defaults with :-):
+#   - INSTANCE_MAX_CONCURRENT_PROJECTS (default: 1)
+#   - INSTANCE_MAX_PARALLEL_REQUESTS (default: 10)
+#   - INSTANCE_MAX_REQUESTS_PER_MINUTE (default: 60)
+#   - PREDEFINED_ENDPOINTS (default: [])
+#   - BODY_SIZE_LIMIT (default: 50M)
+#   - PB_BATCH_* settings
+# ============================================================
+
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     container_name: pocketbase-backend
-    env_file:
-      - .env
+    environment:
+      # Required: Admin credentials for first-run setup
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:?}
+      # Optional: PocketBase Batch API settings
+      - PB_BATCH_ENABLED=${PB_BATCH_ENABLED:-true}
+      - PB_BATCH_MAX_REQUESTS=${PB_BATCH_MAX_REQUESTS:-100}
+      - PB_BATCH_TIMEOUT=${PB_BATCH_TIMEOUT:-30}
+      - PB_BATCH_MAX_BODY_SIZE=${PB_BATCH_MAX_BODY_SIZE:-134217728}
     volumes:
       - ./data/pb_data:/pb/pb_data
     ports:
@@ -26,17 +52,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-      args:
-        - PUBLIC_POCKETBASE_URL=${PUBLIC_POCKETBASE_URL:-}
     container_name: sveltekit-frontend
-    env_file:
-      - .env
     environment:
+      # Internal: Docker environment detection (do not change)
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090
       - ADDON_NETWORK=tabtin-network
       - ADDON_DATA_PATH=/app/addon-data
       - ADDONS_DIR=/app/addons
+      # Required: Admin credentials (for queue worker authentication)
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:?}
+      # Optional: Instance limits (global caps)
+      - INSTANCE_MAX_CONCURRENT_PROJECTS=${INSTANCE_MAX_CONCURRENT_PROJECTS:-1}
+      - INSTANCE_MAX_PARALLEL_REQUESTS=${INSTANCE_MAX_PARALLEL_REQUESTS:-10}
+      - INSTANCE_MAX_REQUESTS_PER_MINUTE=${INSTANCE_MAX_REQUESTS_PER_MINUTE:-60}
+      # Optional: Predefined LLM endpoints (JSON array)
+      - PREDEFINED_ENDPOINTS=${PREDEFINED_ENDPOINTS:-[]}
+      # Optional: Upload size limit
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/addons:/app/addon-data

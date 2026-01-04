@@ -3,7 +3,7 @@
 import { json, error } from '@sveltejs/kit';
 import { getQueueManager } from '$lib/server/queue';
 import { env as privateEnv } from '$env/dynamic/private';
-import { env as publicEnv } from '$env/dynamic/public';
+import { POCKETBASE_URL } from '$lib/config/pocketbase';
 import PocketBase from 'pocketbase';
 import { requireProjectAuth } from '$lib/server/authorization';
 import type { RequestHandler } from './$types';
@@ -25,8 +25,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const queueManager = getQueueManager();
 
 		console.log('[cancel endpoint] Authenticating with PocketBase');
-		const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
-		const pb = new PocketBase(pocketbaseUrl);
+		const pb = new PocketBase(POCKETBASE_URL);
 		pb.autoCancellation(false);
 		await pb.collection('_superusers').authWithPassword(
 			privateEnv.POCKETBASE_ADMIN_EMAIL || '',

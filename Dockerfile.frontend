@@ -12,11 +12,9 @@ RUN npm ci --production=false
 # Copy source files
 COPY . .
 
-# Accept build arguments for environment variables
-ARG PUBLIC_POCKETBASE_URL
-ENV PUBLIC_POCKETBASE_URL=$PUBLIC_POCKETBASE_URL
-
 # Build the application
+# Note: No build args needed - client uses window.location.origin,
+# server detects Docker via DOCKER_ENV and uses backend:8090
 RUN npm run build
 
 # Production stage
@@ -49,9 +47,7 @@ COPY nginx.conf /etc/nginx/nginx.conf
 COPY frontend-entrypoint.sh /frontend-entrypoint.sh
 RUN chmod +x /frontend-entrypoint.sh
 
-# Accept runtime environment variables
-ARG PUBLIC_POCKETBASE_URL
-ENV PUBLIC_POCKETBASE_URL=$PUBLIC_POCKETBASE_URL
+# Runtime environment variables
 ENV PORT=3000
 ENV HOST=0.0.0.0
 

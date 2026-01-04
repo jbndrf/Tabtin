@@ -4,7 +4,7 @@ import { WorkerOrchestrator } from './worker-orchestrator';
 import { QueueManager } from './queue-manager';
 import type { WorkerConfig } from './types';
 import { env as privateEnv } from '$env/dynamic/private';
-import { env as publicEnv } from '$env/dynamic/public';
+import { POCKETBASE_URL } from '$lib/config/pocketbase';
 
 export * from './types';
 export { QueueManager } from './queue-manager';
@@ -25,11 +25,10 @@ const DEFAULT_CONFIG: WorkerConfig = {
 
 export function getQueueManager(): QueueManager {
 	if (!queueManagerInstance) {
-		const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
 		const adminEmail = privateEnv.POCKETBASE_ADMIN_EMAIL || 'admin@example.com';
 		const adminPassword = privateEnv.POCKETBASE_ADMIN_PASSWORD || 'admin1234';
 
-		queueManagerInstance = new QueueManager(pocketbaseUrl, adminEmail, adminPassword);
+		queueManagerInstance = new QueueManager(POCKETBASE_URL, adminEmail, adminPassword);
 	}
 
 	return queueManagerInstance;
@@ -37,13 +36,12 @@ export function getQueueManager(): QueueManager {
 
 export function getOrchestrator(): WorkerOrchestrator {
 	if (!orchestratorInstance) {
-		const pocketbaseUrl = publicEnv.PUBLIC_POCKETBASE_URL || 'http://127.0.0.1:8090';
 		const adminEmail = privateEnv.POCKETBASE_ADMIN_EMAIL || 'admin@example.com';
 		const adminPassword = privateEnv.POCKETBASE_ADMIN_PASSWORD || 'admin1234';
 
 		orchestratorInstance = new WorkerOrchestrator(
 			DEFAULT_CONFIG,
-			pocketbaseUrl,
+			POCKETBASE_URL,
 			adminEmail,
 			adminPassword
 		);
