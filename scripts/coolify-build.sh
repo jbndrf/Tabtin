@@ -1,5 +1,6 @@
 #!/bin/sh
 # Coolify build script - generates docker-compose.override.yaml with Traefik labels
+# and pulls prebuilt images from Gitea registry (no building needed)
 # Called by Coolify's custom build command with CUSTOM_DOMAIN and APP_UUID env vars
 
 set -e
@@ -25,6 +26,7 @@ EOF
 echo "Generated docker-compose.override.yaml:"
 cat docker-compose.override.yaml
 
-echo "Running docker compose build..."
-# Use Coolify's build-time.env file which contains all the environment variables
-docker compose --env-file /artifacts/build-time.env -f docker-compose.yaml -f docker-compose.override.yaml build
+echo "Pulling prebuilt images from Gitea registry..."
+docker compose -f docker-compose.prebuilt.yaml pull
+
+echo "Images pulled successfully"
