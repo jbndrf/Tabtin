@@ -10,22 +10,33 @@ if [ -z "$CUSTOM_DOMAIN" ] || [ -z "$APP_UUID" ]; then
   exit 1
 fi
 
-# Get the project name from the current directory (used by docker-compose for network naming)
-PROJECT_NAME=$(basename "$(pwd)")
-NETWORK_NAME="${PROJECT_NAME}_app-network"
-
 echo "Generating Traefik labels for domain: $CUSTOM_DOMAIN"
-echo "Project: $PROJECT_NAME, Network: $NETWORK_NAME"
+echo "Creating network: $APP_UUID"
+
+# Create the network with the APP_UUID name (if it doesn't exist)
+docker network create "$APP_UUID" 2>/dev/null || true
+
+# Connect Traefik to this network
+docker network connect "$APP_UUID" coolify-proxy 2>/dev/null || true
 
 cat > docker-compose.override.yaml << EOF
 services:
   frontend:
+    networks:
+      - default
     labels:
       - traefik.enable=true
       - "traefik.http.routers.frontend-${APP_UUID}.rule=Host(\`${CUSTOM_DOMAIN}\`)"
       - traefik.http.routers.frontend-${APP_UUID}.entryPoints=http
       - traefik.http.services.frontend-${APP_UUID}.loadbalancer.server.port=80
-      - traefik.docker.network=${NETWORK_NAME}
+      - traefik.docker.network=${APP_UUID}
+  backend:
+    networks:
+      - default
+networks:
+  default:
+    name: ${APP_UUID}
+    external: true
 EOF
 
 echo "Generated docker-compose.override.yaml:"
