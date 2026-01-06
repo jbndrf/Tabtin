@@ -10,24 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: catthehacker/ubuntu:act-latest
-      options: --privileged --add-host=gitea:192.168.1.70
-    services:
-      docker:
-        image: docker:24-dind
-        options: --privileged
-        env:
-          DOCKER_TLS_CERTDIR: ""
-    env:
-      DOCKER_HOST: tcp://docker:2375
+      options: --privileged --add-host=gitea:192.168.1.70 -v /var/run/docker.sock:/var/run/docker.sock
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Wait for Docker
-        run: |
-          for i in $(seq 1 30); do
-            docker info && break || sleep 2
-          done
+      - name: Check Docker
+        run: docker info
 
       - name: Login to Gitea Registry
         run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login 192.168.1.70:3000 -u janbndrf --password-stdin
