@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: catthehacker/ubuntu:act-latest
-      options: --privileged --add-host=gitea:192.168.1.70 -v /var/run/docker.sock:/var/run/docker.sock
+      options: --privileged --add-host=gitea:192.168.1.70
     steps:
       - name: Checkout
         uses: actions/checkout@v4
