@@ -13,13 +13,15 @@
 		ChevronDown,
 		Puzzle,
 		BarChart3,
-		Shield
+		Shield,
+		Loader2
 	} from 'lucide-svelte';
 	import { page } from '$app/stores';
 	import { enhance, applyAction } from '$app/forms';
 	import type { ProjectsResponse } from '$lib/pocketbase-types';
 	import { menuItemsForSection } from '$lib/stores/addons';
 	import { currentUser, pb } from '$lib/stores/auth';
+	import { processingStatusStore } from '$lib/stores/processing-status.svelte';
 
 	let { projects = [] }: { projects?: ProjectsResponse[] } = $props();
 
@@ -128,7 +130,11 @@
 								<div class="flex items-center">
 									<a href="/projects/{project.id}" class="flex-1">
 										<Sidebar.MenuButton isActive={isActive(`/projects/${project.id}`)}>
-											<FolderKanban class="h-4 w-4" />
+											{#if processingStatusStore.processingProjectIds.includes(project.id)}
+												<Loader2 class="h-4 w-4 animate-spin" />
+											{:else}
+												<FolderKanban class="h-4 w-4" />
+											{/if}
 											<span>{project.name}</span>
 										</Sidebar.MenuButton>
 									</a>

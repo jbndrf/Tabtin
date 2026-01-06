@@ -57,25 +57,19 @@ function isPublicRoute(pathname: string): boolean {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
-	console.log('[hooks] START', event.request.method, event.url.pathname);
-
 	event.locals.pb = new PocketBase(POCKETBASE_URL);
 
 	// Load the auth cookie into the PocketBase instance
 	try {
 		event.locals.pb.authStore.loadFromCookie(event.request.headers.get('cookie') || '');
-		console.log('[hooks] Cookie loaded, isValid:', event.locals.pb.authStore.isValid);
-	} catch (e) {
-		console.error('[hooks] Failed to parse auth cookie:', e);
+	} catch (_) {
 		event.locals.pb.authStore.clear();
 	}
 
 	// Verify and refresh the auth token if it's valid
 	try {
 		if (event.locals.pb.authStore.isValid) {
-			console.log('[hooks] Refreshing auth...');
 			await event.locals.pb.collection('users').authRefresh();
-			console.log('[hooks] Auth refreshed');
 			// Set the user in locals for API routes
 			event.locals.user = event.locals.pb.authStore.record;
 			// Set admin status from user record
@@ -83,9 +77,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 		} else {
 			event.locals.isAdmin = false;
 		}
-	} catch (e) {
+	} catch (_) {
 		// Clear auth store if refresh fails (token expired or invalid)
-		console.log('[hooks] Auth refresh failed:', e);
 		event.locals.pb.authStore.clear();
 		event.locals.user = null;
 		event.locals.isAdmin = false;
@@ -93,13 +86,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	// Redirect unauthenticated users to login (except for public routes)
 	if (!event.locals.pb.authStore.isValid && !isPublicRoute(event.url.pathname)) {
-		console.log('[hooks] Redirecting to login');
 		throw redirect(303, '/login');
 	}
 
-	console.log('[hooks] Calling resolve...');
 	const response = await resolve(event);
-	console.log('[hooks] Resolve done');
 
 	// Sync the auth state back to cookies
 	// Security: httpOnly prevents XSS from stealing session, secure ensures HTTPS only, sameSite prevents CSRF
@@ -114,6 +104,5 @@ export const handle: Handle = async ({ event, resolve }) => {
 		response.headers.append('set-cookie', pbCookie);
 	}
 
-	console.log('[hooks] END');
 	return response;
 };

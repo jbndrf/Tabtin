@@ -18,7 +18,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 
 	// Get today's usage for all endpoints
 	const usageRecords = await pb.collection('endpoint_usage').getFullList({
-		filter: `date = "${today}"`
+		filter: `date ~ "${today}"`
 	});
 
 	const usageMap = new Map(usageRecords.map((u) => [u.endpoint, u]));

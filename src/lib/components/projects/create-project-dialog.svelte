@@ -11,6 +11,38 @@
 	import type { ProjectsResponse } from '$lib/pocketbase-types';
 	import { onMount } from 'svelte';
 	import { projectsStore } from '$lib/stores/projects.svelte';
+	import { DEFAULT_FEATURE_FLAGS } from '$lib/types/extraction';
+
+	// Default settings for new projects
+	const DEFAULT_PROJECT_SETTINGS = {
+		// PDF settings
+		pdfDpi: 300,
+		pdfFormat: 'png',
+		pdfQuality: 100,
+		pdfMaxWidth: 1024,
+		pdfMaxHeight: 1024,
+		includeOcrText: true,
+		// Image settings
+		imageMaxDimension: 1024,
+		// Model parameters
+		enableDeterministicMode: true,
+		temperature: 0.0,
+		topK: 1,
+		topP: 1.0,
+		repetitionPenalty: 1.0,
+		frequencyPenalty: 0.0,
+		presencePenalty: 0.0,
+		// Feature flags (uses defaults from extraction.ts)
+		featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+		// Rate limiting
+		requestsPerMinute: 15,
+		enableParallelRequests: false,
+		maxConcurrency: 3,
+		requestTimeout: 10,
+		// Prompt settings
+		selectedPreset: 'qwen3vl',
+		coordinateFormat: 'normalized_1000'
+	};
 
 	let {
 		open = $bindable(false),
@@ -65,19 +97,19 @@
 		isLoading = true;
 
 		try {
-			let settingsToUse = undefined;
+			let settingsToUse = { ...DEFAULT_PROJECT_SETTINGS };
 
 			if (selectedTemplateId && copySettings) {
 				const templateProject = projects.find(p => p.id === selectedTemplateId);
 				if (templateProject?.settings) {
-					settingsToUse = templateProject.settings;
+					settingsToUse = templateProject.settings as typeof settingsToUse;
 				}
 			}
 
 			const newProject = await pb.collection('projects').create<ProjectsResponse>({
 				name,
 				user: $currentUser?.id,
-				...(settingsToUse && { settings: settingsToUse })
+				settings: settingsToUse
 			});
 
 			// Add the new project to the store

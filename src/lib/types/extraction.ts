@@ -8,9 +8,9 @@ export interface ExtractionFeatureFlags {
 
 export const DEFAULT_FEATURE_FLAGS: ExtractionFeatureFlags = {
 	boundingBoxes: true,
-	confidenceScores: true,
+	confidenceScores: false,
 	multiRowExtraction: false,
-	toonOutput: false,
+	toonOutput: true,
 	perPageExtraction: false
 };
 

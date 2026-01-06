@@ -115,7 +115,7 @@
 		frequencyPenalty: 0.0,
 		presencePenalty: 0.0
 	};
-	let enableDeterministicMode = $state<boolean>(false);
+	let enableDeterministicMode = $state<boolean>(true);
 	let temperature = $state<number>(SAMPLING_DEFAULTS.temperature);
 	let topK = $state<number>(SAMPLING_DEFAULTS.topK);
 	let topP = $state<number>(SAMPLING_DEFAULTS.topP);
@@ -149,7 +149,7 @@
 	let requestTimeout = $state<number>(API_DEFAULTS.requestTimeout);
 
 	// Image scaling (for non-PDF images)
-	let imageMaxDimension = $state<number | null>(null); // null = no scaling, otherwise max pixels for longest side
+	let imageMaxDimension = $state<number | null>(1024); // max pixels for longest side, null = no scaling
 
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
@@ -290,7 +290,7 @@
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
 
 			// Load image scaling
-			imageMaxDimension = settings.imageMaxDimension ?? null;
+			imageMaxDimension = settings.imageMaxDimension ?? 1024;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -1173,6 +1173,28 @@
 							</p>
 						</div>
 
+						<!-- TOON Output Format Toggle -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="toonOutput" class="cursor-pointer">Compact Format (TOON)</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Uses a space-efficient response format that reduces API costs by 40-50%. Disable if you experience parsing errors.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="toonOutput" bind:checked={featureFlags.toonOutput} />
+						</div>
+
 						<!-- Deterministic Mode -->
 						<div class="flex items-center justify-between py-2">
 							<div class="flex items-center gap-2">
@@ -1223,28 +1245,6 @@
 								</div>
 							</div>
 						{/if}
-
-						<!-- TOON Output Format Toggle -->
-						<div class="flex items-center justify-between py-2">
-							<div class="flex items-center gap-2">
-								<Label for="toonOutput" class="cursor-pointer">Compact Format (TOON)</Label>
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										{#snippet child({ props })}
-											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-												<HelpCircle class="h-4 w-4" />
-											</button>
-										{/snippet}
-									</Tooltip.Trigger>
-									<Tooltip.Content>
-										<div class="max-w-xs">
-											<p class="text-xs">Uses a space-efficient response format that reduces API costs by 40-50%. Disable if you experience parsing errors.</p>
-										</div>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							</div>
-							<Switch id="toonOutput" bind:checked={featureFlags.toonOutput} />
-						</div>
 					</div>
 				</Tabs.Content>
 
@@ -1254,42 +1254,12 @@
 						<div>
 							<h2 class="text-lg font-semibold">Prompts</h2>
 							<p class="mt-1 text-sm text-muted-foreground">
-								Configure custom prompt templates.
-							</p>
-						</div>
-
-						<!-- Custom Prompt Template -->
-						<div class="space-y-2">
-							<Label for="promptTemplate">Extraction Prompt</Label>
-							<Textarea
-								id="promptTemplate"
-								bind:value={promptTemplate}
-								placeholder="Leave empty to use auto-generated prompt based on your schema..."
-								rows={8}
-								class="font-mono text-xs"
-							/>
-							<p class="text-xs text-muted-foreground">
-								Custom instructions sent to the AI. Leave empty for auto-generated prompt.
-							</p>
-						</div>
-
-						<!-- Review Prompt Template -->
-						<div class="space-y-2">
-							<Label for="reviewPromptTemplate">Re-extraction Prompt</Label>
-							<Textarea
-								id="reviewPromptTemplate"
-								bind:value={reviewPromptTemplate}
-								placeholder="Used when re-extracting specific fields..."
-								rows={6}
-								class="font-mono text-xs"
-							/>
-							<p class="text-xs text-muted-foreground">
-								Used when re-extracting specific fields from cropped regions.
+								Preview the auto-generated prompt based on your schema.
 							</p>
 						</div>
 
 						<!-- Prompt Preview -->
-						<Accordion.Root type="single" collapsible class="w-full">
+						<Accordion.Root type="single" collapsible class="w-full" value="preview">
 							<Accordion.Item value="preview">
 								<Accordion.Trigger class="text-sm font-medium">Generated Prompt Preview</Accordion.Trigger>
 								<Accordion.Content>
@@ -1440,6 +1410,28 @@
 							</p>
 						</div>
 
+						<!-- Multiple Items per Document -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="multiRowExtraction" class="cursor-pointer">Multiple Items per Document</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Enable for documents with tables or lists (invoices, statements). Disable for single-item documents (labels, IDs).</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="multiRowExtraction" bind:checked={featureFlags.multiRowExtraction} />
+						</div>
+
 						<!-- Location Highlighting (Bounding Boxes) -->
 						<div class="flex items-center justify-between py-2">
 							<div class="flex items-center gap-2">
@@ -1499,28 +1491,6 @@
 								</Tooltip.Root>
 							</div>
 							<Switch id="confidenceScores" bind:checked={featureFlags.confidenceScores} />
-						</div>
-
-						<!-- Multiple Items per Document -->
-						<div class="flex items-center justify-between py-2">
-							<div class="flex items-center gap-2">
-								<Label for="multiRowExtraction" class="cursor-pointer">Multiple Items per Document</Label>
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										{#snippet child({ props })}
-											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
-												<HelpCircle class="h-4 w-4" />
-											</button>
-										{/snippet}
-									</Tooltip.Trigger>
-									<Tooltip.Content>
-										<div class="max-w-xs">
-											<p class="text-xs">Enable for documents with tables or lists (invoices, statements). Disable for single-item documents (labels, IDs).</p>
-										</div>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							</div>
-							<Switch id="multiRowExtraction" bind:checked={featureFlags.multiRowExtraction} />
 						</div>
 					</div>
 				</Tabs.Content>

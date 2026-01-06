@@ -9,6 +9,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { pageActions } from '$lib/stores/page-actions';
 	import { projectsStore } from '$lib/stores/projects.svelte';
+	import { processingStatusStore } from '$lib/stores/processing-status.svelte';
 	import { initAddonBridge, destroyAddonBridge } from '$lib/utils/addon-bridge';
 	import { fetchAddons } from '$lib/stores/addons';
 	import AddonPanel from '$lib/components/addons/AddonPanel.svelte';
@@ -20,6 +21,8 @@
 		if ($currentUser?.id) {
 			projectsStore.loadProjects($currentUser.id);
 		}
+		// Initialize processing status tracking
+		processingStatusStore.init();
 		// Initialize addon bridge for postMessage communication
 		initAddonBridge();
 		// Load installed addons
@@ -27,6 +30,7 @@
 	});
 
 	onDestroy(() => {
+		processingStatusStore.cleanup();
 		destroyAddonBridge();
 	});
 
