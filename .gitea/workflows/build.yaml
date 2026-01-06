@@ -8,40 +8,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: docker:24-cli
+      options: --privileged
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Login to Gitea Registry
-        uses: docker/login-action@v3
-        with:
-          registry: 192.168.1.70:3000
-          username: janbndrf
-          password: ${{ secrets.REGISTRY_TOKEN }}
+        run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login 192.168.1.70:3000 -u janbndrf --password-stdin
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
+      - name: Build backend
+        run: docker build -f Dockerfile.backend -t 192.168.1.70:3000/janbndrf/tabtin-backend:latest -t 192.168.1.70:3000/janbndrf/tabtin-backend:${{ github.sha }} .
 
-      - name: Build and push backend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.backend
-          push: true
-          tags: |
-            192.168.1.70:3000/janbndrf/tabtin-backend:latest
-            192.168.1.70:3000/janbndrf/tabtin-backend:${{ github.sha }}
-          network: host
+      - name: Build frontend
+        run: docker build -f Dockerfile.frontend -t 192.168.1.70:3000/janbndrf/tabtin-frontend:latest -t 192.168.1.70:3000/janbndrf/tabtin-frontend:${{ github.sha }} .
 
-      - name: Build and push frontend
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.frontend
-          push: true
-          tags: |
-            192.168.1.70:3000/janbndrf/tabtin-frontend:latest
-            192.168.1.70:3000/janbndrf/tabtin-frontend:${{ github.sha }}
-          network: host
+      - name: Push backend
+        run: |
+          docker push 192.168.1.70:3000/janbndrf/tabtin-backend:latest
+          docker push 192.168.1.70:3000/janbndrf/tabtin-backend:${{ github.sha }}
+
+      - name: Push frontend
+        run: |
+          docker push 192.168.1.70:3000/janbndrf/tabtin-frontend:latest
+          docker push 192.168.1.70:3000/janbndrf/tabtin-frontend:${{ github.sha }}
