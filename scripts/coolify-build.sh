@@ -27,6 +27,6 @@ echo "Generated docker-compose.override.yaml:"
 cat docker-compose.override.yaml
 
 echo "Pulling prebuilt images from Gitea registry..."
-docker compose -f docker-compose.prebuilt.yaml pull
+docker compose --env-file /artifacts/build-time.env -f docker-compose.prebuilt.yaml pull
 
 echo "Images pulled successfully"
