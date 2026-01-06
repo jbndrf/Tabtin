@@ -35,6 +35,9 @@ logs
 # PocketBase data (will be mounted as volume)
 pb/pb_data
 
+# Runtime data (mounted as volumes)
+data/
+
 # Documentation
 *.md
 docs/

@@ -34,10 +34,22 @@
 		loadedImages = new Set([...loadedImages, batchId]);
 	}
 
-	// Check if project has a model configured
-	let hasModelConfigured = $derived(
-		$currentProject?.settings && typeof $currentProject.settings === 'object' && 'modelName' in $currentProject.settings && Boolean($currentProject.settings.modelName)
-	);
+	// Check if project has a model configured (either custom modelName or managed endpoint)
+	let hasModelConfigured = $derived.by(() => {
+		const settings = $currentProject?.settings;
+		if (!settings || typeof settings !== 'object') return false;
+
+		const s = settings as Record<string, unknown>;
+		// Check for managed endpoint mode
+		if (s.endpoint_mode === 'managed' && s.managed_endpoint_id) {
+			return true;
+		}
+		// Check for custom endpoint mode with modelName
+		if (s.modelName) {
+			return true;
+		}
+		return false;
+	});
 
 	// Status counts
 	let statusCounts = $derived({

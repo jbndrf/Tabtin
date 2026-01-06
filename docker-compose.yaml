@@ -25,7 +25,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     # Self-hosters: Uncomment to set fixed container name
-    # container_name: pocketbase-backend
+    container_name: pocketbase-backend
     environment:
       # Required: Admin credentials for first-run setup
       - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:?}
@@ -38,8 +38,8 @@ services:
     volumes:
       - ./data/pb_data:/pb/pb_data
     # Self-hosters: Uncomment to expose PocketBase directly (for admin UI access)
-    # ports:
-    #   - "8090:8090"
+    ports:
+      - "8090:8090"
     networks:
       - app-network
     restart: unless-stopped
@@ -56,7 +56,7 @@ services:
       dockerfile: Dockerfile.frontend
     # Traefik labels are injected dynamically by Coolify provisioning via docker-compose.override.yaml
     # Self-hosters: Uncomment and configure labels manually, or use ports instead
-    # labels:
+    #labels:
     #   - traefik.enable=true
     #   - "traefik.http.routers.frontend.rule=Host(`your-domain.com`)"
     #   - traefik.http.routers.frontend.entryPoints=http
@@ -85,10 +85,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/addons:/app/addon-data
-      - nginx_cache:/var/cache/nginx
+      - ./data/nginx_cache:/var/cache/nginx
     # Self-hosters: Uncomment to expose on port 80 directly
-    # ports:
-    #   - "80:80"
+    ports:
+      - "80:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -111,14 +111,14 @@ services:
 
 networks:
   app-network:
-    # Self-hosters: Uncomment for custom network config
-    # name: tabtin-network
-    # driver: bridge
-    # driver_opts:
-    #   com.docker.network.bridge.name: br-app
-    # ipam:
-    #   config:
-    #     - subnet: 172.27.0.0/16
+#    Self-hosters: Uncomment for custom network config
+    name: tabtin-network
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-app
+    ipam:
+      config:
+        - subnet: 172.27.0.0/16
 
 volumes:
   nginx_cache:

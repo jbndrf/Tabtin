@@ -60,7 +60,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.pb = new PocketBase(POCKETBASE_URL);
 
 	// Load the auth cookie into the PocketBase instance
-	event.locals.pb.authStore.loadFromCookie(event.request.headers.get('cookie') || '');
+	try {
+		event.locals.pb.authStore.loadFromCookie(event.request.headers.get('cookie') || '');
+	} catch (e) {
+		console.error('Failed to parse auth cookie:', e);
+		event.locals.pb.authStore.clear();
+	}
 
 	// Verify and refresh the auth token if it's valid
 	try {
