@@ -30,9 +30,16 @@ services:
       - traefik.http.routers.frontend-${APP_UUID}.entryPoints=http
       - traefik.http.services.frontend-${APP_UUID}.loadbalancer.server.port=80
       - traefik.docker.network=${APP_UUID}
+      - coolify.managed=true
+      - coolify.applicationId=${APP_UUID}
+      - coolify.type=application
   backend:
     networks:
       - default
+    labels:
+      - coolify.managed=true
+      - coolify.applicationId=${APP_UUID}
+      - coolify.type=application
 networks:
   default:
     name: ${APP_UUID}
