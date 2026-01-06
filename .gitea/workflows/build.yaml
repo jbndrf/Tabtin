@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: catthehacker/ubuntu:act-latest
-      options: --privileged
+      options: --privileged --add-host=gitea:192.168.1.70
     services:
       docker:
         image: docker:24-dind
