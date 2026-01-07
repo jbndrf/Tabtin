@@ -2,6 +2,7 @@
 
 import { json } from '@sveltejs/kit';
 import { getAddonManager } from '$lib/server/addons';
+import { ADDONS_ENABLED } from '$lib/server/startup';
 import type { RequestHandler } from './$types';
 
 /**
@@ -9,6 +10,10 @@ import type { RequestHandler } from './$types';
  * Body: { endpoint: string, method?: string, data?: unknown }
  */
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+	if (!ADDONS_ENABLED) {
+		return json({ success: false, error: 'Addons are disabled on this instance' }, { status: 503 });
+	}
+
 	try {
 		const userId = locals.user?.id;
 		if (!userId) {

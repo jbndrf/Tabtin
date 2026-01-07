@@ -15,7 +15,7 @@ version: '3.8'
 #   - INSTANCE_MAX_PARALLEL_REQUESTS (default: 10)
 #   - INSTANCE_MAX_REQUESTS_PER_MINUTE (default: 60)
 #   - PREDEFINED_ENDPOINTS (default: [])
-#   - BODY_SIZE_LIMIT (default: 50M)
+#   - BODY_SIZE_LIMIT (default: 500M)
 #   - ALLOW_IMPORT_EXPORT (default: false)
 #   - PB_BATCH_* settings
 # ============================================================
@@ -68,6 +68,8 @@ services:
       # Internal: Docker environment detection (do not change)
       - DOCKER_ENV=true
       - POCKETBASE_URL=http://backend:8090
+      # Addon system: Set to false to disable (for hosted deployments without docker socket)
+      - ADDONS_ENABLED=${ADDONS_ENABLED:-true}
       - ADDON_NETWORK=tabtin-network
       - ADDON_DATA_PATH=/app/addon-data
       - ADDONS_DIR=/app/addons
@@ -81,8 +83,8 @@ services:
       # Optional: Predefined LLM endpoints (JSON array)
       # No default - set via provisioning server or Coolify UI
       - PREDEFINED_ENDPOINTS=${PREDEFINED_ENDPOINTS}
-      # Optional: Upload size limit
-      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
+      # Optional: Upload size limit (increased for project imports)
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-500M}
       # Optional: Enable project import/export (dev utility, disabled by default)
       - ALLOW_IMPORT_EXPORT=${ALLOW_IMPORT_EXPORT:-false}
     volumes:

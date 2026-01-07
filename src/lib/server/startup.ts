@@ -7,6 +7,13 @@ import { getAdminPb } from './admin-auth';
 import { getAdminCredentials, getPredefinedEndpoints } from './instance-config';
 import { initializeAddons, registerShutdownHandlers } from './addons/lifecycle';
 
+/**
+ * Feature flag for addon system
+ * When false, addon initialization is skipped and API routes return 503
+ * Set via ADDONS_ENABLED env var (default: true)
+ */
+export const ADDONS_ENABLED = process.env.ADDONS_ENABLED !== 'false';
+
 // Global flags to prevent re-running startup tasks on HMR
 declare global {
 	// eslint-disable-next-line no-var
@@ -146,17 +153,20 @@ export async function runStartupTasks(): Promise<void> {
 	}
 
 	// Initialize addon containers (restart previously running)
-	if (!globalThis.__addonLifecycleInitialized) {
+	if (ADDONS_ENABLED && !globalThis.__addonLifecycleInitialized) {
 		globalThis.__addonLifecycleInitialized = true;
 		await initializeAddons();
+	} else if (!ADDONS_ENABLED) {
+		console.log('[Setup] Addon system disabled (ADDONS_ENABLED=false)');
 	}
 }
 
 /**
  * Initialize shutdown handlers (call once at module load)
+ * Only registers addon shutdown handlers if addons are enabled
  */
 export function initShutdownHandlers(): void {
-	if (!globalThis.__shutdownHandlersRegistered) {
+	if (ADDONS_ENABLED && !globalThis.__shutdownHandlersRegistered) {
 		globalThis.__shutdownHandlersRegistered = true;
 		registerShutdownHandlers();
 	}

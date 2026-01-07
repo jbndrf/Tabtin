@@ -129,6 +129,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const imagesData: ImportedImage[] = JSON.parse(files['images.json'].toString());
 		const rowsData: ImportedRow[] = JSON.parse(files['extraction_rows.json'].toString());
 
+		console.log('[Import] Parsed data:', {
+			batches: batchesData.length,
+			images: imagesData.length,
+			rows: rowsData.length
+		});
+
+		// Debug: Show first batch and first image to verify format
+		if (batchesData.length > 0) {
+			console.log('[Import] Sample batch:', JSON.stringify(batchesData[0], null, 2));
+		}
+		if (imagesData.length > 0) {
+			console.log('[Import] Sample image:', JSON.stringify(imagesData[0], null, 2));
+			console.log('[Import] Image batch field type:', typeof imagesData[0].batch, 'isArray:', Array.isArray(imagesData[0].batch));
+		}
+
 		// Validate manifest
 		if (manifest.format !== 'tabtin') {
 			throw error(400, 'Invalid archive format');
@@ -150,24 +165,39 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			document_analyses: projectData.document_analyses
 		});
 		idMap.project.set(projectData.id, newProject.id);
+		console.log('[Import] Created project:', newProject.id);
 
 		// 2. Create batches
 		for (const batch of batchesData) {
-			const newBatch = await pb.collection('image_batches').create({
-				project: [newProject.id],
-				status: batch.status,
-				processed_data: batch.processed_data,
-				row_count: batch.row_count,
-				error_message: batch.error_message
-			});
-			idMap.batch.set(batch.id, newBatch.id);
+			try {
+				const newBatch = await pb.collection('image_batches').create({
+					project: [newProject.id],
+					status: batch.status,
+					processed_data: batch.processed_data,
+					row_count: batch.row_count,
+					error_message: batch.error_message
+				});
+				idMap.batch.set(batch.id, newBatch.id);
+				console.log(`[Import] Created batch: ${batch.id} -> ${newBatch.id}`);
+			} catch (e) {
+				console.error(`[Import] Failed to create batch ${batch.id}:`, e);
+			}
 		}
+		console.log('[Import] Batch ID map size:', idMap.batch.size);
+		console.log('[Import] Batch ID mappings:', Object.fromEntries(idMap.batch));
 
 		// 3. Create images (with files)
+		let imageSkipCount = 0;
+		let imageCreateCount = 0;
 		for (const img of imagesData) {
-			const newBatchId = idMap.batch.get(img.batch[0]);
+			// Handle both array and string formats for batch relation
+			const batchId = Array.isArray(img.batch) ? img.batch[0] : img.batch;
+			const newBatchId = idMap.batch.get(batchId);
 			if (!newBatchId) {
-				console.warn(`Skipping image ${img.id}: batch not found`);
+				if (imageSkipCount < 3) {
+					console.warn(`[Import] Skipping image ${img.id}: batch "${batchId}" not in map. img.batch raw:`, img.batch);
+				}
+				imageSkipCount++;
 				continue;
 			}
 
@@ -201,7 +231,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 			const newImage = await pb.collection('images').create(imageFormData);
 			idMap.image.set(img.id, newImage.id);
+			imageCreateCount++;
 		}
+		console.log(`[Import] Images: ${imageCreateCount} created, ${imageSkipCount} skipped`);
 
 		// Update parent_image references
 		for (const img of imagesData) {
@@ -218,9 +250,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// 4. Create extraction rows
 		for (const row of rowsData) {
-			const newBatchId = idMap.batch.get(row.batch[0]);
+			// Handle both array and string formats for batch relation
+			const batchId = Array.isArray(row.batch) ? row.batch[0] : row.batch;
+			const newBatchId = idMap.batch.get(batchId);
 			if (!newBatchId) {
-				console.warn(`Skipping row ${row.id}: batch not found`);
+				console.warn(`Skipping row ${row.id}: batch not found (looking for: ${batchId})`);
 				continue;
 			}
 

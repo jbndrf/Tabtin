@@ -9,7 +9,21 @@ import type { AddonManifest } from '$lib/types/addon';
 import { resolve } from 'path';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'fs';
 
-const docker = new Docker({ socketPath: '/var/run/docker.sock' });
+// Read directly from env to avoid circular dependency with startup.ts
+const ADDONS_ENABLED = process.env.ADDONS_ENABLED !== 'false';
+
+// Only initialize Docker client if addons are enabled
+const docker = ADDONS_ENABLED ? new Docker({ socketPath: '/var/run/docker.sock' }) : null;
+
+/**
+ * Get Docker client, throwing if addons are disabled
+ */
+function getDocker(): Docker {
+	if (!docker) {
+		throw new Error('Addons are disabled on this instance (ADDONS_ENABLED=false)');
+	}
+	return docker;
+}
 
 // Network name - can be set via env var for Docker Compose projects
 const ADDON_NETWORK = process.env.ADDON_NETWORK || 'bridge';
@@ -48,7 +62,7 @@ export function getContainerName(addonId: string, userId: string): string {
  */
 async function imageExistsLocally(imageName: string): Promise<boolean> {
 	try {
-		const images = await docker.listImages({
+		const images = await getDocker().listImages({
 			filters: { reference: [imageName] }
 		});
 		return images.length > 0;
@@ -95,8 +109,9 @@ export async function buildImage(imageName: string, force = false): Promise<void
 
 	console.log(`[Addon] Building image: ${imageName} from ${buildContext}`);
 
+	const dockerClient = getDocker();
 	return new Promise((resolve, reject) => {
-		docker.buildImage(
+		dockerClient.buildImage(
 			{
 				context: buildContext,
 				src: ['.']
@@ -115,7 +130,7 @@ export async function buildImage(imageName: string, force = false): Promise<void
 					return reject(new Error('No build stream returned'));
 				}
 
-				docker.modem.followProgress(
+				dockerClient.modem.followProgress(
 					stream,
 					(err: Error | null, output: Array<{ stream?: string; error?: string }>) => {
 						if (err) {
@@ -206,7 +221,7 @@ export async function waitForHealth(
  * Find an available port for addon container
  */
 async function findAvailablePort(startPort = 9000): Promise<number> {
-	const containers = await docker.listContainers({ all: true });
+	const containers = await getDocker().listContainers({ all: true });
 	const usedPorts = new Set<number>();
 
 	for (const container of containers) {
@@ -235,9 +250,11 @@ export async function createContainer(config: ContainerConfig): Promise<Containe
 
 	console.log(`[Addon] Creating container: ${containerName}`);
 
+	const dockerClient = getDocker();
+
 	// Check if container already exists
 	try {
-		const existingContainer = docker.getContainer(containerName);
+		const existingContainer = dockerClient.getContainer(containerName);
 		const info = await existingContainer.inspect();
 		if (info) {
 			console.log(`[Addon] Container already exists, removing: ${containerName}`);
@@ -269,7 +286,7 @@ export async function createContainer(config: ContainerConfig): Promise<Containe
 	const useBridge = ADDON_NETWORK === 'bridge';
 	const hostPort = useBridge ? await findAvailablePort() : undefined;
 
-	const container = await docker.createContainer({
+	const container = await dockerClient.createContainer({
 		Image: config.dockerImage,
 		name: containerName,
 		Env: envVars,
@@ -318,7 +335,7 @@ export async function stopContainer(containerIdOrName: string): Promise<void> {
 	console.log(`[Addon] Stopping container: ${containerIdOrName}`);
 
 	try {
-		const container = docker.getContainer(containerIdOrName);
+		const container = getDocker().getContainer(containerIdOrName);
 		await container.stop({ t: 10 }); // 10 second timeout for graceful shutdown
 		console.log(`[Addon] Container stopped: ${containerIdOrName}`);
 	} catch (error: unknown) {
@@ -339,7 +356,7 @@ export async function startContainer(containerIdOrName: string): Promise<void> {
 	console.log(`[Addon] Starting container: ${containerIdOrName}`);
 
 	try {
-		const container = docker.getContainer(containerIdOrName);
+		const container = getDocker().getContainer(containerIdOrName);
 		await container.start();
 		console.log(`[Addon] Container started: ${containerIdOrName}`);
 	} catch (error: unknown) {
@@ -360,7 +377,7 @@ export async function removeContainer(containerIdOrName: string): Promise<void> 
 	console.log(`[Addon] Removing container: ${containerIdOrName}`);
 
 	try {
-		const container = docker.getContainer(containerIdOrName);
+		const container = getDocker().getContainer(containerIdOrName);
 
 		// Stop first if running
 		try {
@@ -388,7 +405,7 @@ export async function removeImage(imageName: string): Promise<void> {
 	console.log(`[Addon] Removing image: ${imageName}`);
 
 	try {
-		const image = docker.getImage(imageName);
+		const image = getDocker().getImage(imageName);
 		await image.remove({ force: true });
 		console.log(`[Addon] Image removed: ${imageName}`);
 	} catch (error: unknown) {
@@ -429,7 +446,7 @@ export async function getContainerStatus(
 	containerIdOrName: string
 ): Promise<'running' | 'stopped' | 'not_found'> {
 	try {
-		const container = docker.getContainer(containerIdOrName);
+		const container = getDocker().getContainer(containerIdOrName);
 		const info = await container.inspect();
 
 		if (info.State.Running) {
@@ -452,7 +469,7 @@ export async function getContainerLogs(
 	containerIdOrName: string,
 	tail = 100
 ): Promise<string> {
-	const container = docker.getContainer(containerIdOrName);
+	const container = getDocker().getContainer(containerIdOrName);
 
 	const logs = await container.logs({
 		stdout: true,
@@ -466,8 +483,12 @@ export async function getContainerLogs(
 
 /**
  * Check if Docker is available
+ * Returns false if addons are disabled or Docker is not accessible
  */
 export async function isDockerAvailable(): Promise<boolean> {
+	if (!ADDONS_ENABLED || !docker) {
+		return false;
+	}
 	try {
 		await docker.ping();
 		return true;
@@ -480,7 +501,7 @@ export async function isDockerAvailable(): Promise<boolean> {
  * List all addon containers by label
  */
 export async function listAddonContainers(): Promise<Docker.ContainerInfo[]> {
-	const containers = await docker.listContainers({
+	const containers = await getDocker().listContainers({
 		all: true,
 		filters: { label: ['tabtin.addon=true'] }
 	});
@@ -500,9 +521,10 @@ export async function stopAllAddonContainers(timeoutSeconds = 10): Promise<void>
 
 	console.log(`[Addon] Stopping ${containers.length} addon container(s)...`);
 
+	const dockerClient = getDocker();
 	await Promise.allSettled(
 		containers.map(async (containerInfo) => {
-			const container = docker.getContainer(containerInfo.Id);
+			const container = dockerClient.getContainer(containerInfo.Id);
 			const name = containerInfo.Names[0] || containerInfo.Id;
 			try {
 				await container.stop({ t: timeoutSeconds });

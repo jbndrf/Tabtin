@@ -6,8 +6,13 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getAddonManager } from '$lib/server/addons/manager';
+import { ADDONS_ENABLED } from '$lib/server/startup';
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
+	if (!ADDONS_ENABLED) {
+		throw error(503, 'Addons are disabled on this instance');
+	}
+
 	const { addonId, path } = params;
 
 	console.log(`[AddonProxy] GET request - addonId: ${addonId}, path: ${path}, user: ${locals.user?.id || 'none'}`);
@@ -78,6 +83,10 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 };
 
 export const POST: RequestHandler = async ({ params, locals, url, request }) => {
+	if (!ADDONS_ENABLED) {
+		throw error(503, 'Addons are disabled on this instance');
+	}
+
 	const { addonId, path } = params;
 
 	if (!locals.user) {

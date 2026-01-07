@@ -2,12 +2,17 @@
 
 import { json } from '@sveltejs/kit';
 import { getAddonManager } from '$lib/server/addons';
+import { ADDONS_ENABLED } from '$lib/server/startup';
 import type { RequestHandler } from './$types';
 
 /**
  * GET /api/addons/[id] - Get addon details
  */
 export const GET: RequestHandler = async ({ params, locals }) => {
+	if (!ADDONS_ENABLED) {
+		return json({ success: false, error: 'Addons are disabled on this instance' }, { status: 503 });
+	}
+
 	try {
 		const userId = locals.user?.id;
 		if (!userId) {
@@ -41,6 +46,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
  * Body: { config: Record<string, unknown> }
  */
 export const PUT: RequestHandler = async ({ params, request, locals }) => {
+	if (!ADDONS_ENABLED) {
+		return json({ success: false, error: 'Addons are disabled on this instance' }, { status: 503 });
+	}
+
 	try {
 		const userId = locals.user?.id;
 		if (!userId) {
@@ -82,6 +91,10 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
  * DELETE /api/addons/[id] - Uninstall addon
  */
 export const DELETE: RequestHandler = async ({ params, locals }) => {
+	if (!ADDONS_ENABLED) {
+		return json({ success: false, error: 'Addons are disabled on this instance' }, { status: 503 });
+	}
+
 	try {
 		const userId = locals.user?.id;
 		if (!userId) {

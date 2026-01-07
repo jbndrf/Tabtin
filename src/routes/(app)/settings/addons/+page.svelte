@@ -50,6 +50,9 @@
 
 	// Initialize store with server data
 	onMount(async () => {
+		// Skip initialization if addons are disabled
+		if (!data.addonsEnabled) return;
+
 		if (data.addons) {
 			installedAddons.set(data.addons);
 		}
@@ -84,7 +87,6 @@
 	let configDialogOpen = $state(false);
 
 	// Form states
-	let dockerImage = $state('');
 	let installing = $state(false);
 	let selectedAddon = $state<InstalledAddon | null>(null);
 	let logs = $state('');
@@ -133,26 +135,6 @@
 		try {
 			const installed = await installAddon(addon.dockerImage);
 			toast.success(`Addon "${installed.name}" installed successfully`);
-			installDialogOpen = false;
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'Installation failed');
-		} finally {
-			installing = false;
-		}
-	}
-
-	// Handle install
-	async function handleInstall() {
-		if (!dockerImage.trim()) {
-			toast.error('Please enter a Docker image URL');
-			return;
-		}
-
-		installing = true;
-		try {
-			const addon = await installAddon(dockerImage.trim());
-			toast.success(`Addon "${addon.name}" installed successfully`);
-			dockerImage = '';
 			installDialogOpen = false;
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Installation failed');
@@ -269,6 +251,25 @@
 </script>
 
 <div class="flex flex-col gap-4 p-4">
+	<!-- Disabled State -->
+	{#if !data.addonsEnabled}
+		<div class="flex flex-col gap-2">
+			<h2 class="text-2xl font-bold tracking-tight">Addons</h2>
+			<p class="text-muted-foreground">Docker-based addon system</p>
+		</div>
+		<Card class="border-dashed">
+			<CardContent class="flex flex-col items-center justify-center py-12">
+				<Package class="text-muted-foreground mb-4 h-12 w-12" />
+				<h3 class="text-lg font-medium">Addons Disabled</h3>
+				<p class="text-muted-foreground mb-2 text-center max-w-md">
+					The addon system is disabled on this hosted instance.
+				</p>
+				<p class="text-muted-foreground text-center text-sm max-w-md">
+					Self-hosted deployments can enable addons by setting <code class="bg-muted px-1 rounded">ADDONS_ENABLED=true</code> and mounting the Docker socket.
+				</p>
+			</CardContent>
+		</Card>
+	{:else}
 	<!-- Header -->
 	<div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
 		<div>
@@ -403,6 +404,7 @@
 				</Card>
 			{/each}
 		</div>
+	{/if}
 	{/if}
 </div>
 

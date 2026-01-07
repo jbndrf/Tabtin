@@ -12,21 +12,16 @@
 		Settings,
 		ChevronDown,
 		Puzzle,
-		BarChart3,
-		Shield,
 		Loader2
 	} from 'lucide-svelte';
 	import { page } from '$app/stores';
 	import { enhance, applyAction } from '$app/forms';
 	import type { ProjectsResponse } from '$lib/pocketbase-types';
 	import { menuItemsForSection } from '$lib/stores/addons';
-	import { currentUser, pb } from '$lib/stores/auth';
+	import { pb } from '$lib/stores/auth';
 	import { processingStatusStore } from '$lib/stores/processing-status.svelte';
 
 	let { projects = [] }: { projects?: ProjectsResponse[] } = $props();
-
-	// Check if current user is admin
-	let isAdmin = $derived(($currentUser as any)?.is_admin === true);
 
 	// Addon menu items for each section
 	const mainMenuItems = menuItemsForSection('main');
@@ -83,25 +78,6 @@
 							</Sidebar.MenuButton>
 						</a>
 					</Sidebar.MenuItem>
-					<Sidebar.MenuItem>
-						<a href="/metrics" class="w-full">
-							<Sidebar.MenuButton isActive={isActive('/metrics')}>
-								<BarChart3 class="h-4 w-4" />
-								<span>Metrics</span>
-							</Sidebar.MenuButton>
-						</a>
-					</Sidebar.MenuItem>
-
-					{#if isAdmin}
-						<Sidebar.MenuItem>
-							<a href="/admin" class="w-full">
-								<Sidebar.MenuButton isActive={isActive('/admin')}>
-									<Shield class="h-4 w-4" />
-									<span>Admin</span>
-								</Sidebar.MenuButton>
-							</a>
-						</Sidebar.MenuItem>
-					{/if}
 
 					<!-- Addon menu items for 'main' section -->
 					{#each $mainMenuItems as { item } (item.id)}
