@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Card, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Package } from 'lucide-svelte';
+	import { Package, FolderSync } from 'lucide-svelte';
 </script>
 
 <div class="flex flex-col gap-6 p-4">
@@ -23,6 +23,23 @@
 						<div>
 							<CardTitle class="text-base">Addons</CardTitle>
 							<CardDescription>Manage Docker-based addons</CardDescription>
+						</div>
+					</div>
+				</CardHeader>
+			</Card>
+		</a>
+
+		<!-- Project Transfer -->
+		<a href="/settings/transfer" class="block">
+			<Card class="h-full transition-colors hover:bg-muted/50">
+				<CardHeader>
+					<div class="flex items-center gap-3">
+						<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+							<FolderSync class="h-5 w-5 text-primary" />
+						</div>
+						<div>
+							<CardTitle class="text-base">Project Transfer</CardTitle>
+							<CardDescription>Export and import projects</CardDescription>
 						</div>
 					</div>
 				</CardHeader>

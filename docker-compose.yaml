@@ -16,6 +16,7 @@ version: '3.8'
 #   - INSTANCE_MAX_REQUESTS_PER_MINUTE (default: 60)
 #   - PREDEFINED_ENDPOINTS (default: [])
 #   - BODY_SIZE_LIMIT (default: 50M)
+#   - ALLOW_IMPORT_EXPORT (default: false)
 #   - PB_BATCH_* settings
 # ============================================================
 
@@ -82,6 +83,8 @@ services:
       - PREDEFINED_ENDPOINTS=${PREDEFINED_ENDPOINTS}
       # Optional: Upload size limit
       - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-50M}
+      # Optional: Enable project import/export (dev utility, disabled by default)
+      - ALLOW_IMPORT_EXPORT=${ALLOW_IMPORT_EXPORT:-false}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/addons:/app/addon-data

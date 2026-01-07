@@ -70,7 +70,10 @@
 		"@simplewebauthn/browser": "^13.2.2",
 		"@sveltejs/adapter-node": "^5.4.0",
 		"@toon-format/toon": "^2.1.0",
+		"@types/archiver": "^7.0.0",
+		"@types/unzipper": "^0.10.11",
 		"@xyflow/svelte": "^1.4.0",
+		"archiver": "^7.0.1",
 		"date-fns": "^4.1.0",
 		"dockerode": "^4.0.9",
 		"lucide-svelte": "^0.546.0",
@@ -79,6 +82,7 @@
 		"sharp": "^0.34.5",
 		"svelte-sonner": "^1.0.5",
 		"sveltekit-superforms": "^2.28.0",
+		"unzipper": "^0.12.3",
 		"zod": "^4.1.12"
 	}
 }
