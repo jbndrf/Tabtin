@@ -907,7 +907,7 @@
 										<option value="">Select an endpoint...</option>
 										{#each managedEndpoints as ep}
 											<option value={ep.id}>
-												{ep.alias} ({ep.model_name}) - {ep.provider_type}
+												{ep.alias} ({ep.model_name})
 											</option>
 										{/each}
 									</select>
