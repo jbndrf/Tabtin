@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { onMount, onDestroy } from 'svelte';
+	import { on } from 'svelte/events';
 	import { X, Zap, ZapOff, SwitchCamera } from 'lucide-svelte';
 	import { Button } from '$lib/components/ui/button';
 	import CameraViewfinder from '$lib/components/capture/CameraViewfinder.svelte';
@@ -31,6 +32,7 @@
 	}
 
 	let gallery = $state<CapturedImage[]>([]);
+	let currentZoomLevel = $state(1);
 
 	// Track uploading batches count
 	let uploadingCount = $state(0);
@@ -57,7 +59,29 @@
 
 	onMount(() => {
 		window.addEventListener('beforeunload', handleBeforeUnload);
-		return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+
+		// Lock viewport to prevent browser pinch-to-zoom on this page
+		const meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement;
+		const originalContent = meta?.content;
+		if (meta) {
+			meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
+		}
+
+		// Block multi-touch browser zoom (iOS Safari fallback)
+		const offTouchMove = on(document, 'touchmove', (e: TouchEvent) => {
+			if (e.touches.length > 1) e.preventDefault();
+		}, { passive: false });
+
+		const offGestureStart = on(document, 'gesturestart' as any, (e: Event) => {
+			e.preventDefault();
+		}, { passive: false });
+
+		return () => {
+			window.removeEventListener('beforeunload', handleBeforeUnload);
+			if (meta && originalContent) meta.content = originalContent;
+			offTouchMove();
+			offGestureStart();
+		};
 	});
 
 	function handleStreamReady() {
@@ -150,9 +174,13 @@
 	function flipCamera() {
 		facingMode = facingMode === 'environment' ? 'user' : 'environment';
 	}
+
+	function handleZoomChange(level: number) {
+		currentZoomLevel = level;
+	}
 </script>
 
-<div class="fixed inset-0 bg-black select-none touch-manipulation">
+<div class="fixed inset-0 bg-black select-none" style="touch-action: none">
 	{#if cameraError}
 		<!-- Fallback UI -->
 		<div class="flex items-center justify-center h-full px-6">
@@ -178,14 +206,24 @@
 			frozen={approveMode}
 			onStreamReady={handleStreamReady}
 			onError={handleCameraError}
+			onZoomChange={handleZoomChange}
 		/>
+
+		<!-- Zoom indicator -->
+		{#if currentZoomLevel > 1.05}
+			<div class="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-black/60 backdrop-blur-sm rounded-full px-3 py-1">
+				<span class="text-white text-sm font-medium">{currentZoomLevel.toFixed(1)}x</span>
+			</div>
+		{/if}
 
 		<!-- Top Bar -->
 		<div class="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-[env(safe-area-inset-top)] mt-2">
 			<!-- Close -->
 			<button
-				class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+				class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center
+					{approveMode ? 'opacity-30 pointer-events-none' : ''}"
 				onclick={handleClose}
+				disabled={approveMode}
 			>
 				<X class="h-5 w-5 text-white" />
 			</button>
@@ -194,8 +232,10 @@
 				<!-- Flash toggle -->
 				{#if hasFlash}
 					<button
-						class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+						class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center
+							{approveMode ? 'opacity-30 pointer-events-none' : ''}"
 						onclick={toggleFlash}
+						disabled={approveMode}
 					>
 						{#if flashEnabled}
 							<Zap class="h-5 w-5 text-yellow-400" />
@@ -206,8 +246,10 @@
 				{/if}
 				<!-- Camera flip -->
 				<button
-					class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+					class="h-10 w-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center
+						{approveMode ? 'opacity-30 pointer-events-none' : ''}"
 					onclick={flipCamera}
+					disabled={approveMode}
 				>
 					<SwitchCamera class="h-5 w-5 text-white" />
 				</button>

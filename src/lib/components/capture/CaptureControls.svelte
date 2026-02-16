@@ -61,6 +61,7 @@
 			<div
 				bind:this={galleryStripEl}
 				class="flex gap-2 overflow-x-auto pb-2 scrollbar-hide"
+				style="touch-action: pan-x"
 			>
 				{#each gallery as img (img.id)}
 					<div class="relative shrink-0 animate-slide-in">
@@ -70,8 +71,10 @@
 							class="h-14 w-14 rounded-lg border-2 border-white/30 object-cover"
 						/>
 						<button
-							class="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-black/60 flex items-center justify-center"
+							class="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-black/60 flex items-center justify-center
+								{approveMode ? 'pointer-events-none opacity-30' : ''}"
 							onclick={() => onRemoveFromGallery(img.id)}
+							disabled={approveMode}
 						>
 							<X class="h-3 w-3 text-white" />
 						</button>
@@ -85,8 +88,10 @@
 					{gallery.length} photo{gallery.length === 1 ? '' : 's'}
 				</span>
 				<button
-					class="text-sm text-white/50 hover:text-white/80 transition-colors"
+					class="text-sm text-white/50 hover:text-white/80 transition-colors
+						{approveMode ? 'pointer-events-none opacity-30' : ''}"
 					onclick={onClearAll}
+					disabled={approveMode}
 				>
 					Clear All
 				</button>
@@ -127,11 +132,11 @@
 
 			<!-- Right: Upload Batch -->
 			<button
-				class="rounded-full px-4 h-10 text-sm font-medium transition-colors {gallery.length > 0
+				class="rounded-full px-4 h-10 text-sm font-medium transition-colors {gallery.length > 0 && !approveMode
 					? 'bg-white text-black'
 					: 'bg-white/10 text-white/30 pointer-events-none'}"
 				onclick={onUploadBatch}
-				disabled={gallery.length === 0}
+				disabled={gallery.length === 0 || approveMode}
 			>
 				Upload ({gallery.length})
 			</button>
