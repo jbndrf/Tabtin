@@ -456,12 +456,13 @@ export class QueueWorker {
 			}));
 
 			const imageMaxDimension = settings.imageMaxDimension ?? null;
-			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency}, imageMaxDimension=${imageMaxDimension ?? 'original'})`);
+			const imageQuality = settings.imageQuality ?? 85;
+			console.log(`[Batch] Converting ${items.length} items (maxConcurrency=${maxConcurrency}, imageMaxDimension=${imageMaxDimension ?? 'original'}, imageQuality=${imageQuality})`);
 
 			// 1. CONVERT ALL IMAGES/PDFs (can parallelize conversion)
 			await this.executeWithConcurrencyLimit(
 				items,
-				async (item) => this.convertSingleItem(item, pdfOptions, imageMaxDimension),
+				async (item) => this.convertSingleItem(item, pdfOptions, imageMaxDimension, imageQuality),
 				maxConcurrency
 			);
 
@@ -1691,14 +1692,28 @@ export class QueueWorker {
 				// Extract the extractions array from the decoded object
 				parsedData = (decoded as any)?.extractions ?? decoded;
 
-				// Unescape JSON string values (they were escaped for TOON parsing)
+				// Post-process TOON-decoded values
 				if (Array.isArray(parsedData)) {
-					parsedData = parsedData.map(item => ({
-						...item,
-						value: typeof item.value === 'string' && item.value.startsWith('{')
-							? item.value.replace(/\\"/g, '"')
-							: item.value
-					}));
+					parsedData = parsedData.map(item => {
+						const processed = { ...item };
+						// Unescape JSON string values (they were escaped for TOON parsing)
+						if (typeof processed.value === 'string' && processed.value.startsWith('{')) {
+							processed.value = processed.value.replace(/\\"/g, '"');
+						}
+						// Parse bbox_2d from string to array (TOON outputs it as "[120,45,380,195]")
+						if (typeof processed.bbox_2d === 'string') {
+							try {
+								processed.bbox_2d = JSON.parse(processed.bbox_2d);
+							} catch {
+								// Fallback: try parsing as comma-separated numbers without brackets
+								const nums = processed.bbox_2d.replace(/[\[\]]/g, '').split(',').map((s: string) => parseInt(s.trim(), 10) || 0);
+								if (nums.length === 4) {
+									processed.bbox_2d = nums;
+								}
+							}
+						}
+						return processed;
+					});
 				}
 			} else {
 				// Content doesn't look like TOON, try JSON
@@ -1748,10 +1763,14 @@ export class QueueWorker {
 			}));
 		}
 
-		// 5. Reconstruct bbox_2d from flattened coordinate fields (TOON + bbox only)
+		// 5. Reconstruct bbox_2d from flattened coordinate fields (fallback for legacy TOON flat format)
+		// Only needed if bbox_2d is missing but individual coord fields (x1,y1,x2,y2) exist
 		if (featureFlags.toonOutput && featureFlags.boundingBoxes && Array.isArray(parsedData)) {
-			console.log('Reconstructing bbox_2d from flattened coordinates...');
-			parsedData = this.reconstructBboxFromFlatCoords(parsedData, coordinateFormat);
+			const needsReconstruction = parsedData.some(e => !e.bbox_2d && ('x1' in e || 'y_min' in e));
+			if (needsReconstruction) {
+				console.log('Reconstructing bbox_2d from flattened coordinates (legacy fallback)...');
+				parsedData = this.reconstructBboxFromFlatCoords(parsedData, coordinateFormat);
+			}
 		}
 
 		console.log('Final extractions count:', Array.isArray(parsedData) ? parsedData.length : 'not an array');
@@ -1885,7 +1904,8 @@ export class QueueWorker {
 	private async convertSingleItem(
 		item: ProcessableItem,
 		pdfOptions: PdfConversionOptions,
-		imageMaxDimension: number | null = null
+		imageMaxDimension: number | null = null,
+		imageQuality: number = 85
 	): Promise<void> {
 		const url = this.pb.files.getURL(item.image, item.image.image);
 		let response: Response | null = await fetch(url);
@@ -1925,7 +1945,7 @@ export class QueueWorker {
 			arrayBuffer = null; // Release arrayBuffer
 
 			// Scale/normalize image (handles EXIF rotation + optional max dimension scaling)
-			const scaled = await scaleImageToMaxDimension(imageBuffer, imageMaxDimension);
+			const scaled = await scaleImageToMaxDimension(imageBuffer, imageMaxDimension, imageQuality);
 			imageBuffer = null; // Release original
 			imageBuffer = scaled.buffer;
 			const finalMimeType = scaled.mimeType;

@@ -148,9 +148,22 @@
 	};
 	let requestTimeout = $state<number>(API_DEFAULTS.requestTimeout);
 
-	// Image scaling (for non-PDF images)
-	let imageMaxDimension = $state<number | null>(1024); // max pixels for longest side, null = no scaling
-	let resizeOnUpload = $state<boolean>(true); // resize images client-side before uploading
+	// Image settings (for non-PDF images)
+	const IMAGE_DEFAULTS = {
+		maxDimension: 1024 as number | null,
+		quality: 85,
+		resizeOnUpload: true
+	};
+	let imageMaxDimension = $state<number | null>(IMAGE_DEFAULTS.maxDimension);
+	let imageQuality = $state<number>(IMAGE_DEFAULTS.quality);
+	let resizeOnUpload = $state<boolean>(IMAGE_DEFAULTS.resizeOnUpload);
+
+	function resetImageDefaults() {
+		imageMaxDimension = IMAGE_DEFAULTS.maxDimension;
+		imageQuality = IMAGE_DEFAULTS.quality;
+		resizeOnUpload = IMAGE_DEFAULTS.resizeOnUpload;
+		toast.success('Image settings reset to defaults');
+	}
 
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
@@ -290,9 +303,10 @@
 			// Load API request settings
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
 
-			// Load image scaling
-			imageMaxDimension = settings.imageMaxDimension !== undefined ? settings.imageMaxDimension : 1024;
-			resizeOnUpload = settings.resizeOnUpload !== undefined ? settings.resizeOnUpload : true;
+			// Load image settings
+			imageMaxDimension = settings.imageMaxDimension !== undefined ? settings.imageMaxDimension : IMAGE_DEFAULTS.maxDimension;
+			imageQuality = settings.imageQuality ?? IMAGE_DEFAULTS.quality;
+			resizeOnUpload = settings.resizeOnUpload !== undefined ? settings.resizeOnUpload : IMAGE_DEFAULTS.resizeOnUpload;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -469,8 +483,9 @@
 				includeOcrText,
 				// API request settings
 				requestTimeout,
-				// Image scaling
+				// Image settings
 				imageMaxDimension,
+				imageQuality,
 				resizeOnUpload,
 				// Sampling parameters
 				enableDeterministicMode,
@@ -755,11 +770,16 @@
 				<!-- Images Sub-tab -->
 				<Tabs.Content value="images" class="mt-4 space-y-4">
 					<div class="space-y-4">
-						<div>
-							<h2 class="text-lg font-semibold">Image Settings</h2>
-							<p class="mt-1 text-sm text-muted-foreground">
-								Configure how images are processed before sending to the AI.
-							</p>
+						<div class="flex items-start justify-between">
+							<div>
+								<h2 class="text-lg font-semibold">Image Settings</h2>
+								<p class="mt-1 text-sm text-muted-foreground">
+									Configure how images are processed before sending to the AI.
+								</p>
+							</div>
+							<Button variant="outline" size="sm" onclick={resetImageDefaults}>
+								Reset to Defaults
+							</Button>
 						</div>
 
 						<!-- Resize on Upload -->
@@ -857,6 +877,47 @@
 								{/if}
 							</p>
 						</div>
+
+						<!-- Advanced Settings -->
+						<Accordion.Root type="single" collapsible class="w-full">
+							<Accordion.Item value="advanced">
+								<Accordion.Trigger class="text-sm font-medium">Advanced Settings</Accordion.Trigger>
+								<Accordion.Content>
+									<div class="space-y-4 pt-4">
+										<!-- JPEG Quality Setting -->
+										<div class="space-y-2">
+											<div class="flex items-center gap-2">
+												<Label for="imageQuality">JPEG Quality</Label>
+												<span class="text-sm text-muted-foreground">{imageQuality}%</span>
+												<Tooltip.Root>
+													<Tooltip.Trigger>
+														{#snippet child({ props })}
+															<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+																<HelpCircle class="h-4 w-4" />
+															</button>
+														{/snippet}
+													</Tooltip.Trigger>
+													<Tooltip.Content>
+														<div class="max-w-xs">
+															<p class="text-xs">JPEG compression quality for images. Higher = better quality, larger files. 85% is a good balance.</p>
+														</div>
+													</Tooltip.Content>
+												</Tooltip.Root>
+											</div>
+											<input
+												type="range"
+												id="imageQuality"
+												bind:value={imageQuality}
+												min="50"
+												max="100"
+												step="5"
+												class="w-full max-w-xs"
+											/>
+										</div>
+									</div>
+								</Accordion.Content>
+							</Accordion.Item>
+						</Accordion.Root>
 					</div>
 				</Tabs.Content>
 			</Tabs.Root>

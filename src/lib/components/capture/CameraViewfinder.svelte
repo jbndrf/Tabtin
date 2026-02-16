@@ -6,12 +6,14 @@
 		facingMode: 'user' | 'environment';
 		flashEnabled: boolean;
 		frozen: boolean;
+		captureMaxDimension?: number | null;
+		captureQuality?: number; // 0-1, default 0.92
 		onStreamReady?: (stream: MediaStream) => void;
 		onError?: (error: string) => void;
 		onZoomChange?: (level: number) => void;
 	}
 
-	let { facingMode, flashEnabled, frozen, onStreamReady, onError, onZoomChange }: Props = $props();
+	let { facingMode, flashEnabled, frozen, captureMaxDimension, captureQuality, onStreamReady, onError, onZoomChange }: Props = $props();
 
 	let videoEl: HTMLVideoElement | undefined = $state();
 	let canvasEl: HTMLCanvasElement | undefined = $state();
@@ -84,6 +86,10 @@
 					supportsHardwareZoom = true;
 					zoomMin = capabilities.zoom.min;
 					zoomMax = capabilities.zoom.max;
+					// Force 1x zoom -- some phones default to 2x telephoto
+					track.applyConstraints({
+						advanced: [{ zoom: capabilities.zoom.min } as any]
+					}).catch(() => {});
 				}
 				if (capabilities?.focusMode?.length > 0) {
 					supportsFocusMode = true;
@@ -337,10 +343,19 @@
 		sw = Math.round(sw);
 		sh = Math.round(sh);
 
-		canvasEl.width = sw;
-		canvasEl.height = sh;
+		// Downscale to target dimension if configured
+		let outW = sw;
+		let outH = sh;
+		if (captureMaxDimension && Math.max(sw, sh) > captureMaxDimension) {
+			const scale = captureMaxDimension / Math.max(sw, sh);
+			outW = Math.round(sw * scale);
+			outH = Math.round(sh * scale);
+		}
+
+		canvasEl.width = outW;
+		canvasEl.height = outH;
 		const ctx = canvasEl.getContext('2d')!;
-		ctx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, sw, sh);
+		ctx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, outW, outH);
 
 		// Flash animation
 		flashOverlayVisible = true;
@@ -348,7 +363,7 @@
 
 		// Freeze: show captured frame
 		const blob = await new Promise<Blob | null>((resolve) =>
-			canvasEl!.toBlob((b) => resolve(b), 'image/jpeg', 0.92)
+			canvasEl!.toBlob((b) => resolve(b), 'image/jpeg', captureQuality ?? 0.92)
 		);
 
 		if (blob) {

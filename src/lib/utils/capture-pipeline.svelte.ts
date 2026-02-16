@@ -43,7 +43,7 @@ let nextId = 0;
 export async function submitCaptureBatch(
 	projectId: string,
 	images: File[],
-	options: { maxDimension?: number | null; resizeOnUpload?: boolean }
+	options: { maxDimension?: number | null; quality?: number; resizeOnUpload?: boolean }
 ): Promise<void> {
 	const batchClientId = `capture-${++nextId}-${Date.now()}`;
 
@@ -66,11 +66,12 @@ export async function submitCaptureBatch(
 	try {
 		// Step 1: Resize images (sequential to avoid memory pressure)
 		const shouldResize = options.resizeOnUpload !== false && options.maxDimension;
+		const quality = (options.quality ?? 85) / 100;
 		const resizedImages: File[] = [];
 
 		for (const img of images) {
 			const resized = shouldResize
-				? await resizeImageFile(img, options.maxDimension!)
+				? await resizeImageFile(img, options.maxDimension!, quality)
 				: img;
 			resizedImages.push(resized);
 			updateBatch(batchClientId, { resizedCount: resizedImages.length });

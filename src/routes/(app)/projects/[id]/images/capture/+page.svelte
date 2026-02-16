@@ -159,6 +159,7 @@
 		// Submit in background
 		submitCaptureBatch(data.projectId, files, {
 			maxDimension: settings?.imageMaxDimension ?? null,
+			quality: settings?.imageQuality ?? 85,
 			resizeOnUpload: settings?.resizeOnUpload !== false
 		});
 	}
@@ -204,6 +205,8 @@
 			{facingMode}
 			{flashEnabled}
 			frozen={approveMode}
+			captureMaxDimension={($currentProject?.settings as any)?.imageMaxDimension ?? null}
+			captureQuality={(($currentProject?.settings as any)?.imageQuality ?? 85) / 100}
 			onStreamReady={handleStreamReady}
 			onError={handleCameraError}
 			onZoomChange={handleZoomChange}

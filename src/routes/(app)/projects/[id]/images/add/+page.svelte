@@ -62,11 +62,12 @@
 		const settings = $currentProject?.settings as any;
 		const shouldResize = settings?.resizeOnUpload !== false && settings?.imageMaxDimension;
 		const maxDim = settings?.imageMaxDimension as number | undefined;
+		const quality = (settings?.imageQuality ?? 85) / 100;
 
 		let processedFiles = files;
 		if (shouldResize && maxDim) {
 			processedFiles = await Promise.all(
-				files.map((file) => resizeImageFile(file, maxDim))
+				files.map((file) => resizeImageFile(file, maxDim, quality))
 			);
 		}
 
