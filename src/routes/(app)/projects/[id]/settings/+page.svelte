@@ -150,6 +150,7 @@
 
 	// Image scaling (for non-PDF images)
 	let imageMaxDimension = $state<number | null>(1024); // max pixels for longest side, null = no scaling
+	let resizeOnUpload = $state<boolean>(true); // resize images client-side before uploading
 
 	function resetPdfDefaults() {
 		pdfDpi = PDF_DEFAULTS.dpi;
@@ -290,7 +291,8 @@
 			requestTimeout = settings.requestTimeout ?? API_DEFAULTS.requestTimeout;
 
 			// Load image scaling
-			imageMaxDimension = settings.imageMaxDimension ?? 1024;
+			imageMaxDimension = settings.imageMaxDimension !== undefined ? settings.imageMaxDimension : 1024;
+			resizeOnUpload = settings.resizeOnUpload !== undefined ? settings.resizeOnUpload : true;
 
 			// Load schema chat history and document analyses
 			schemaChatHistory = ($currentProject.schema_chat_history as SchemaChatMessage[]) || [];
@@ -469,6 +471,7 @@
 				requestTimeout,
 				// Image scaling
 				imageMaxDimension,
+				resizeOnUpload,
 				// Sampling parameters
 				enableDeterministicMode,
 				temperature,
@@ -757,6 +760,28 @@
 							<p class="mt-1 text-sm text-muted-foreground">
 								Configure how images are processed before sending to the AI.
 							</p>
+						</div>
+
+						<!-- Resize on Upload -->
+						<div class="flex items-center justify-between py-2">
+							<div class="flex items-center gap-2">
+								<Label for="resizeOnUpload" class="cursor-pointer">Resize on Upload</Label>
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										{#snippet child({ props })}
+											<button {...props} type="button" class="text-muted-foreground hover:text-foreground transition-colors">
+												<HelpCircle class="h-4 w-4" />
+											</button>
+										{/snippet}
+									</Tooltip.Trigger>
+									<Tooltip.Content>
+										<div class="max-w-xs">
+											<p class="text-xs">Resize images in the browser before uploading. Saves bandwidth and storage. Vision LLMs resize internally anyway, so larger images waste resources.</p>
+										</div>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							</div>
+							<Switch id="resizeOnUpload" bind:checked={resizeOnUpload} />
 						</div>
 
 						<!-- Max Image Size Setting -->

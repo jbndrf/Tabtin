@@ -49,8 +49,10 @@
 		return 'App';
 	});
 
-	// Check if we're on the review page (hide UI chrome)
-	let isReviewPage = $derived($page.url.pathname.includes('/review'));
+	// Check if we're on a fullscreen page (hide UI chrome)
+	let isReviewPage = $derived(
+		$page.url.pathname.includes('/review') || $page.url.pathname.includes('/capture')
+	);
 </script>
 
 {#if isReviewPage}

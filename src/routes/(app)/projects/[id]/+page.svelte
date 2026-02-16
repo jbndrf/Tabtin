@@ -3,10 +3,11 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Table from '$lib/components/ui/table';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Loader2, X, Plus, Camera, ChevronDown, ChevronRight, Images } from 'lucide-svelte';
+	import { Loader2, X, Plus, Camera, ChevronDown, ChevronRight, Images, Zap } from 'lucide-svelte';
 	import type { PageData } from './$types';
 	import { pb, currentUser } from '$lib/stores/auth';
 	import { projectData, currentProject, projectBatches, projectStats, isProjectLoading, type BatchWithData } from '$lib/stores/project-data';
+	import { uploadingBatches, type UploadingBatch } from '$lib/utils/capture-pipeline.svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/utils/toast';
 	import { loadExtractionRows } from '$lib/utils/extraction-rows';
@@ -14,6 +15,27 @@
 
 	// Camera input reference
 	let cameraInput: HTMLInputElement;
+
+	// Track uploading batches from capture pipeline
+	let activeUploads = $state<UploadingBatch[]>([]);
+	const unsubUploads = uploadingBatches.subscribe((map) => {
+		activeUploads = Array.from(map.values());
+	});
+
+	import { onDestroy as onDestroyHook } from 'svelte';
+
+	onDestroyHook(() => {
+		unsubUploads();
+	});
+
+	// Auto-scroll table when new uploads appear
+	$effect(() => {
+		if (activeUploads.length > 0 && tableScrollContainer) {
+			requestAnimationFrame(() => {
+				tableScrollContainer!.scrollTop = tableScrollContainer!.scrollHeight;
+			});
+		}
+	});
 
 	// Helper to convert file to base64
 	function fileToBase64(file: File): Promise<string> {
@@ -444,6 +466,87 @@
 											</Table.Row>
 										{/if}
 									{/each}
+									<!-- Upload progress rows from capture pipeline -->
+									{#each activeUploads as upload (upload.id)}
+										{#if !upload.pbBatchId}
+											<!-- Pre-PocketBase row (resizing) -->
+											<Table.Row class="bg-blue-500/5 animate-pulse">
+												<Table.Cell class="w-8 px-2">
+													<Loader2 class="h-4 w-4 animate-spin text-blue-500" />
+												</Table.Cell>
+												<Table.Cell class="font-mono text-xs text-muted-foreground">
+													--
+												</Table.Cell>
+												<Table.Cell class="text-xs text-muted-foreground">
+													just now
+												</Table.Cell>
+												<Table.Cell>
+													<div class="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+														<Loader2 class="h-3 w-3 animate-spin" />
+														{upload.status === 'resizing'
+															? `Resizing ${upload.resizedCount}/${upload.totalImages}...`
+															: 'Preparing...'}
+													</div>
+												</Table.Cell>
+												{#each columns as _}
+													<Table.Cell>-</Table.Cell>
+												{/each}
+											</Table.Row>
+										{:else if upload.status === 'uploading'}
+											<!-- Uploading row (PB record exists) -->
+											<Table.Row class="bg-blue-500/5">
+												<Table.Cell class="w-8 px-2">
+													<Loader2 class="h-4 w-4 animate-spin text-blue-500" />
+												</Table.Cell>
+												<Table.Cell class="font-mono text-xs">
+													{upload.pbBatchId.slice(0, 8)}
+												</Table.Cell>
+												<Table.Cell class="text-xs text-muted-foreground">
+													just now
+												</Table.Cell>
+												<Table.Cell>
+													<div class="flex items-center gap-2">
+														<div class="flex items-center gap-1.5">
+															<Loader2 class="h-3 w-3 animate-spin text-blue-500" />
+															<span class="text-xs font-medium text-blue-600 dark:text-blue-400">
+																Uploading {upload.uploadedCount}/{upload.totalImages}
+															</span>
+														</div>
+														<div class="h-1 w-16 rounded-full bg-blue-200 dark:bg-blue-900/30 overflow-hidden">
+															<div
+																class="h-full bg-blue-500 rounded-full transition-all duration-300"
+																style="width: {(upload.uploadedCount / upload.totalImages) * 100}%"
+															></div>
+														</div>
+													</div>
+												</Table.Cell>
+												{#each columns as _}
+													<Table.Cell>-</Table.Cell>
+												{/each}
+											</Table.Row>
+										{:else if upload.status === 'error'}
+											<!-- Error row -->
+											<Table.Row class="bg-red-500/5">
+												<Table.Cell class="w-8 px-2">
+													<X class="h-4 w-4 text-red-500" />
+												</Table.Cell>
+												<Table.Cell class="font-mono text-xs text-muted-foreground">
+													{upload.pbBatchId?.slice(0, 8) || '--'}
+												</Table.Cell>
+												<Table.Cell class="text-xs text-muted-foreground">
+													just now
+												</Table.Cell>
+												<Table.Cell>
+													<span class="text-xs text-red-600 dark:text-red-400">
+														{upload.error || 'Upload failed'}
+													</span>
+												</Table.Cell>
+												{#each columns as _}
+													<Table.Cell>-</Table.Cell>
+												{/each}
+											</Table.Row>
+										{/if}
+									{/each}
 									<!-- Empty row for spacing to prevent last row from being hidden by scrollbar -->
 									<Table.Row class="h-4 hover:bg-transparent">
 										<Table.Cell colspan={columns.length + 4} class="p-0"></Table.Cell>
@@ -473,7 +576,7 @@
 		/>
 
 		<!-- Add Batch Button - Fixed at Bottom (Above Mobile Nav) -->
-		<div class="fixed bottom-16 left-0 right-0 bg-background border-t px-4 py-3 shrink-0 md:relative md:bottom-auto md:left-auto md:right-auto">
+		<div class="fixed bottom-16 left-0 right-0 bg-background border-t px-4 py-3 shrink-0 md:relative md:bottom-auto md:left-auto md:right-auto flex items-center gap-2">
 			<Button
 				onclick={() => cameraInput.click()}
 				size="sm"
@@ -482,6 +585,15 @@
 			>
 				<Camera class="h-4 w-4" />
 				Add Batch
+			</Button>
+			<Button
+				onclick={() => goto(`/projects/${data.projectId}/images/capture`)}
+				size="sm"
+				variant="outline"
+				class="gap-2"
+			>
+				<Zap class="h-4 w-4" />
+				Quick Capture
 			</Button>
 		</div>
 	</div>

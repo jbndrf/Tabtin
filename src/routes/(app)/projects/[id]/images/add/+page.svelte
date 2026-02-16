@@ -7,8 +7,10 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { pb } from '$lib/stores/auth';
+	import { projectData, currentProject } from '$lib/stores/project-data';
 	import { toast } from '$lib/utils/toast';
 	import { isPdfFile } from '$lib/utils/pdf-api';
+	import { resizeImageFile } from '$lib/utils/client-image-resize';
 	import type { AddonFileData } from '$lib/types/addon';
 
 	let projectId = $page.params.id as string;
@@ -56,7 +58,19 @@
 
 	// Add files to the selected images array (handles both images and PDFs)
 	async function addFiles(files: File[]) {
-		const newFiles = files.map((file) => ({
+		// Client-side resize if enabled in project settings
+		const settings = $currentProject?.settings as any;
+		const shouldResize = settings?.resizeOnUpload !== false && settings?.imageMaxDimension;
+		const maxDim = settings?.imageMaxDimension as number | undefined;
+
+		let processedFiles = files;
+		if (shouldResize && maxDim) {
+			processedFiles = await Promise.all(
+				files.map((file) => resizeImageFile(file, maxDim))
+			);
+		}
+
+		const newFiles = processedFiles.map((file) => ({
 			id: generateId(),
 			url: URL.createObjectURL(file),
 			file,
