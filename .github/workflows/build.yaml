@@ -1,0 +1,42 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Set version tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "TAG=${{ github.sha }}" >> $GITHUB_ENV
+          fi
+
+      - name: Build and push backend
+        run: |
+          docker build -f Dockerfile.backend \
+            -t ghcr.io/jbndrf/tabtin-backend:latest \
+            -t ghcr.io/jbndrf/tabtin-backend:${{ env.TAG }} .
+          docker push ghcr.io/jbndrf/tabtin-backend:latest
+          docker push ghcr.io/jbndrf/tabtin-backend:${{ env.TAG }}
+
+      - name: Build and push frontend
+        run: |
+          docker build -f Dockerfile.frontend \
+            -t ghcr.io/jbndrf/tabtin-frontend:latest \
+            -t ghcr.io/jbndrf/tabtin-frontend:${{ env.TAG }} .
+          docker push ghcr.io/jbndrf/tabtin-frontend:latest
+          docker push ghcr.io/jbndrf/tabtin-frontend:${{ env.TAG }}
