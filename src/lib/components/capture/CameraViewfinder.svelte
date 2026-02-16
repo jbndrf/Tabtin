@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 
 	interface Props {
 		facingMode: 'user' | 'environment';
@@ -74,7 +74,10 @@
 	// Re-init stream when facingMode changes
 	$effect(() => {
 		facingMode;
-		if (videoEl) initStream();
+		const el = videoEl;
+		if (el) {
+			untrack(() => initStream());
+		}
 	});
 
 	// Handle visibility change (iOS pauses streams)
@@ -85,7 +88,6 @@
 	}
 
 	onMount(() => {
-		initStream();
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 
 		return () => {
