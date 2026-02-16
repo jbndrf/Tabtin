@@ -25,6 +25,8 @@
 	let zoomMin = $state(1);
 	let zoomMax = $state(1);
 	let supportsHardwareZoom = $state(false);
+	let supportsFocusMode = $state(false);
+	let supportsPointsOfInterest = $state(false);
 	let isPinching = $state(false);
 	let lastPinchDistance = 0;
 	let pinchBaseZoom = 1;
@@ -46,11 +48,13 @@
 				stream = null;
 			}
 
-			// Reset zoom state
+			// Reset zoom/focus state
 			currentZoom = 1;
 			zoomMin = 1;
 			zoomMax = 1;
 			supportsHardwareZoom = false;
+			supportsFocusMode = false;
+			supportsPointsOfInterest = false;
 
 			const constraints: MediaStreamConstraints = {
 				video: {
@@ -80,6 +84,12 @@
 					supportsHardwareZoom = true;
 					zoomMin = capabilities.zoom.min;
 					zoomMax = capabilities.zoom.max;
+				}
+				if (capabilities?.focusMode?.length > 0) {
+					supportsFocusMode = true;
+				}
+				if (capabilities?.pointsOfInterest) {
+					supportsPointsOfInterest = true;
 				}
 			}
 
@@ -170,7 +180,7 @@
 		}
 	}
 
-	function handleTapToFocus(clientX: number, clientY: number) {
+	async function handleTapToFocus(clientX: number, clientY: number) {
 		if (!containerEl || !videoEl) return;
 
 		const rect = containerEl.getBoundingClientRect();
@@ -214,13 +224,15 @@
 		const normX = Math.max(0, Math.min(1, (clientX - rect.left - offsetX) / displayW));
 		const normY = Math.max(0, Math.min(1, (clientY - rect.top - offsetY) / displayH));
 
-		// Apply focus (not all devices support this)
+		// Apply focus (only when device actually supports it)
 		const track = stream?.getVideoTracks()[0];
-		if (track) {
+		if (track && supportsFocusMode) {
 			try {
-				track.applyConstraints({
-					advanced: [{ focusMode: 'single-shot', pointOfInterest: { x: normX, y: normY } } as any]
-				}).catch(() => {});
+				const focusConstraints: any = { focusMode: 'single-shot' };
+				if (supportsPointsOfInterest) {
+					focusConstraints.pointsOfInterest = [{ x: normX, y: normY }];
+				}
+				await track.applyConstraints({ advanced: [focusConstraints] });
 			} catch {
 				// Silently ignore unsupported focus
 			}
