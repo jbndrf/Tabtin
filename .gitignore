@@ -12,8 +12,8 @@ vite.config.ts.timestamp-*
 # PocketBase
 pb/pb_data
 data/pb_data
-!pb/pocketbase
 pb/pocketbase.exe
+pb/pocketbase_old*
 
 # Playwright
 /test-results/
@@ -23,3 +23,5 @@ pb/pocketbase.exe
 
 # Misc
 token-analysis.html
+network_changes.md
+requirements.md
