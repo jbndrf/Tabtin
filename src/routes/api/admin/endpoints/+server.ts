@@ -10,7 +10,14 @@ export const GET: RequestHandler = async ({ locals }) => {
 		sort: '+alias'
 	});
 
-	return json({ endpoints });
+	const sanitized = endpoints.map((ep) => {
+		if (ep.is_predefined) {
+			return { ...ep, api_key: '********', endpoint_url: '(managed by instance)' };
+		}
+		return ep;
+	});
+
+	return json({ endpoints: sanitized });
 };
 
 export const POST: RequestHandler = async ({ request, locals }) => {

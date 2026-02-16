@@ -345,7 +345,7 @@
 			<Dialog.Title>{editing ? 'Edit Endpoint' : 'Add Endpoint'}</Dialog.Title>
 			<Dialog.Description>
 				{#if editing?.is_predefined}
-					Predefined endpoints can only have their enabled status and description changed.
+					This endpoint is managed by the instance hoster. You can toggle its enabled status and edit its description.
 				{:else}
 					Configure the LLM endpoint settings.
 				{/if}
@@ -363,120 +363,116 @@
 				/>
 			</div>
 
-			<div class="grid gap-2">
-				<Label for="endpoint-url">Endpoint URL</Label>
-				<Input
-					id="endpoint-url"
-					bind:value={formEndpointUrl}
-					placeholder="https://api.openai.com/v1/chat/completions"
-					disabled={editing?.is_predefined}
-				/>
-			</div>
+			{#if !editing?.is_predefined}
+				<div class="grid gap-2">
+					<Label for="endpoint-url">Endpoint URL</Label>
+					<Input
+						id="endpoint-url"
+						bind:value={formEndpointUrl}
+						placeholder="https://api.openai.com/v1/chat/completions"
+					/>
+				</div>
 
-			<div class="grid gap-2">
-				<Label for="api-key">API Key</Label>
-				<Input
-					id="api-key"
-					type="password"
-					bind:value={formApiKey}
-					placeholder="sk-..."
-					disabled={editing?.is_predefined}
-				/>
-			</div>
+				<div class="grid gap-2">
+					<Label for="api-key">API Key</Label>
+					<Input
+						id="api-key"
+						type="password"
+						bind:value={formApiKey}
+						placeholder="sk-..."
+					/>
+				</div>
 
-			<div class="grid gap-2">
-				<Label for="model-name">Model Name</Label>
-				<div class="flex gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						disabled={!formEndpointUrl || fetchingModels || editing?.is_predefined}
-						onclick={fetchModels}
-					>
-						{#if fetchingModels}
-							<Loader2 class="h-4 w-4 mr-1 animate-spin" />
+				<div class="grid gap-2">
+					<Label for="model-name">Model Name</Label>
+					<div class="flex gap-2">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={!formEndpointUrl || fetchingModels}
+							onclick={fetchModels}
+						>
+							{#if fetchingModels}
+								<Loader2 class="h-4 w-4 mr-1 animate-spin" />
+							{/if}
+							{fetchingModels ? 'Fetching...' : 'Fetch Models'}
+						</Button>
+						{#if availableModels.length > 0}
+							<Popover.Root bind:open={modelComboboxOpen}>
+								<Popover.Trigger asChild>
+									{#snippet child({ props })}
+										<Button
+											{...props}
+											variant="outline"
+											role="combobox"
+											aria-expanded={modelComboboxOpen}
+											class="flex-1 justify-between"
+										>
+											<span class="truncate">
+												{formModelName
+													? availableModels.find((m) => m.id === formModelName)?.name || formModelName
+													: 'Select model...'}
+											</span>
+											<ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
+										</Button>
+									{/snippet}
+								</Popover.Trigger>
+								<Popover.Content class="w-full p-0" align="start">
+									<Command.Root>
+										<Command.Input placeholder="Search models..." />
+										<Command.List>
+											<Command.Empty>No model found.</Command.Empty>
+											<Command.Group>
+												{#each availableModels as model}
+													<Command.Item
+														value={model.id}
+														onSelect={() => {
+															formModelName = model.id;
+															modelComboboxOpen = false;
+														}}
+													>
+														<Check
+															class="mr-2 h-4 w-4 {formModelName === model.id ? 'opacity-100' : 'opacity-0'}"
+														/>
+														{model.name || model.id}
+													</Command.Item>
+												{/each}
+											</Command.Group>
+										</Command.List>
+									</Command.Root>
+								</Popover.Content>
+							</Popover.Root>
+						{:else}
+							<Input
+								id="model-name"
+								bind:value={formModelName}
+								placeholder="gpt-4o"
+								class="flex-1"
+							/>
 						{/if}
-						{fetchingModels ? 'Fetching...' : 'Fetch Models'}
-					</Button>
-					{#if availableModels.length > 0}
-						<Popover.Root bind:open={modelComboboxOpen}>
-							<Popover.Trigger asChild>
-								{#snippet child({ props })}
-									<Button
-										{...props}
-										variant="outline"
-										role="combobox"
-										aria-expanded={modelComboboxOpen}
-										class="flex-1 justify-between"
-										disabled={editing?.is_predefined}
-									>
-										<span class="truncate">
-											{formModelName
-												? availableModels.find((m) => m.id === formModelName)?.name || formModelName
-												: 'Select model...'}
-										</span>
-										<ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
-									</Button>
-								{/snippet}
-							</Popover.Trigger>
-							<Popover.Content class="w-full p-0" align="start">
-								<Command.Root>
-									<Command.Input placeholder="Search models..." />
-									<Command.List>
-										<Command.Empty>No model found.</Command.Empty>
-										<Command.Group>
-											{#each availableModels as model}
-												<Command.Item
-													value={model.id}
-													onSelect={() => {
-														formModelName = model.id;
-														modelComboboxOpen = false;
-													}}
-												>
-													<Check
-														class="mr-2 h-4 w-4 {formModelName === model.id ? 'opacity-100' : 'opacity-0'}"
-													/>
-													{model.name || model.id}
-												</Command.Item>
-											{/each}
-										</Command.Group>
-									</Command.List>
-								</Command.Root>
-							</Popover.Content>
-						</Popover.Root>
-					{:else}
-						<Input
-							id="model-name"
-							bind:value={formModelName}
-							placeholder="gpt-4o"
-							disabled={editing?.is_predefined}
-							class="flex-1"
-						/>
-					{/if}
+					</div>
 				</div>
-			</div>
 
-			<div class="grid grid-cols-2 gap-4">
-				<div class="grid gap-2">
-					<Label for="max-input">Max Input Tokens/Day</Label>
-					<Input
-						id="max-input"
-						type="number"
-						bind:value={formMaxInputTokens}
-						disabled={editing?.is_predefined}
-					/>
+				<div class="grid grid-cols-2 gap-4">
+					<div class="grid gap-2">
+						<Label for="max-input">Max Input Tokens/Day</Label>
+						<Input
+							id="max-input"
+							type="number"
+							bind:value={formMaxInputTokens}
+						/>
+					</div>
+					<div class="grid gap-2">
+						<Label for="max-output">Max Output Tokens/Day</Label>
+						<Input
+							id="max-output"
+							type="number"
+							bind:value={formMaxOutputTokens}
+						/>
+					</div>
 				</div>
-				<div class="grid gap-2">
-					<Label for="max-output">Max Output Tokens/Day</Label>
-					<Input
-						id="max-output"
-						type="number"
-						bind:value={formMaxOutputTokens}
-						disabled={editing?.is_predefined}
-					/>
-				</div>
-			</div>
+			{/if}
 
 			<div class="grid gap-2">
 				<Label for="description">Description</Label>

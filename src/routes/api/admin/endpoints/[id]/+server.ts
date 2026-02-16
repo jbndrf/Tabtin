@@ -9,6 +9,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	try {
 		const endpoint = await pb.collection('llm_endpoints').getOne(params.id);
+		if (endpoint.is_predefined) {
+			endpoint.api_key = '********';
+			endpoint.endpoint_url = '(managed by instance)';
+		}
 		return json({ endpoint });
 	} catch (e: any) {
 		if (e.status === 404) {
