@@ -60,6 +60,9 @@
 	onMount(() => {
 		window.addEventListener('beforeunload', handleBeforeUnload);
 
+		// Lock to portrait orientation to prevent broken landscape stream
+		screen.orientation?.lock?.('portrait-primary').catch(() => {});
+
 		// Lock viewport to prevent browser pinch-to-zoom on this page
 		const meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement;
 		const originalContent = meta?.content;
@@ -78,6 +81,7 @@
 
 		return () => {
 			window.removeEventListener('beforeunload', handleBeforeUnload);
+			screen.orientation?.unlock?.();
 			if (meta && originalContent) meta.content = originalContent;
 			offTouchMove();
 			offGestureStart();
