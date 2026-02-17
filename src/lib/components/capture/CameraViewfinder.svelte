@@ -60,9 +60,7 @@
 
 			const constraints: MediaStreamConstraints = {
 				video: {
-					facingMode: { ideal: facingMode },
-					width: { ideal: 1080 },
-					height: { ideal: 1920 }
+					facingMode: { ideal: facingMode }
 				},
 				audio: false
 			};
