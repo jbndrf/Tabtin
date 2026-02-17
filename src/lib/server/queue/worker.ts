@@ -1637,7 +1637,21 @@ export class QueueWorker {
 			const hasCoordFields = coordFields.some(field => field in extraction);
 
 			if (hasCoordFields) {
-				// Extract coordinate values in order
+				// Check if first available coord field contains all 4 values comma-separated
+				// This happens when the model packs "100,280,300,340" or "[100,280,300,340]" into one field
+				const firstField = coordFields.find(f => f in extraction);
+				const firstVal = firstField ? String(extraction[firstField]) : '';
+
+				if (firstVal.includes(',')) {
+					const nums = firstVal.replace(/[\[\]]/g, '').split(',').map(s => parseInt(s.trim(), 10) || 0);
+					if (nums.length >= 4) {
+						const newExtraction = { ...extraction, bbox_2d: nums.slice(0, 4) };
+						coordFields.forEach(field => delete newExtraction[field]);
+						return newExtraction;
+					}
+				}
+
+				// Normal flat field extraction
 				const coords = coordFields.map(field => {
 					const value = extraction[field];
 					return typeof value === 'number' ? value : (parseInt(value, 10) || 0);
@@ -1763,12 +1777,13 @@ export class QueueWorker {
 			}));
 		}
 
-		// 5. Reconstruct bbox_2d from flattened coordinate fields (fallback for legacy TOON flat format)
-		// Only needed if bbox_2d is missing but individual coord fields (x1,y1,x2,y2) exist
+		// 5. Reconstruct bbox_2d from flattened coordinate fields
+		// TOON prompts use flat coord fields (x1,y1,x2,y2) for tabular output;
+		// this reassembles them into bbox_2d arrays for downstream processing
 		if (featureFlags.toonOutput && featureFlags.boundingBoxes && Array.isArray(parsedData)) {
 			const needsReconstruction = parsedData.some(e => !e.bbox_2d && ('x1' in e || 'y_min' in e));
 			if (needsReconstruction) {
-				console.log('Reconstructing bbox_2d from flattened coordinates (legacy fallback)...');
+				console.log('Reconstructing bbox_2d from flattened coordinate fields...');
 				parsedData = this.reconstructBboxFromFlatCoords(parsedData, coordinateFormat);
 			}
 		}

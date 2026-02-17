@@ -18,6 +18,17 @@ export interface PromptBuilderConfig {
 }
 
 // =============================================================================
+// HELPERS
+// =============================================================================
+
+/**
+ * Parse bboxOrder string like "[x1, y1, x2, y2]" into field names ["x1", "y1", "x2", "y2"]
+ */
+function parseBboxOrderToFields(bboxOrder: string): string[] {
+	return bboxOrder.replace(/[\[\]]/g, '').split(',').map(s => s.trim());
+}
+
+// =============================================================================
 // CORE CONTEXT (minimal, always included)
 // =============================================================================
 
@@ -99,37 +110,27 @@ DONTS:
 
 const RULES_BOUNDING_BOXES = (bboxOrder: string) => `
 BOUNDING BOXES:
-Provide coordinates showing WHERE each value appears in the image.
+For each extracted value, provide bbox_2d coordinates showing WHERE it appears in the image.
+Return coordinates in the format: bbox_2d: ${bboxOrder}
 
 COORDINATE SYSTEM:
-- Values normalized to 0-1000 range (0=top/left edge, 1000=bottom/right edge)
-- Format: ${bboxOrder}
-- For multi-line values, use bbox that covers ALL lines
+- All values are integers in the 0-1000 range (0=top/left edge, 1000=bottom/right edge)
+- X and Y are independently normalized to 0-1000 regardless of image aspect ratio
+- Example: text in top-left area -> [45, 120, 380, 195]
+- Example: text spanning full width near bottom -> [20, 850, 980, 920]
+- Example: small label in center -> [420, 460, 580, 510]
+- For multi-line values, use a single bbox that covers ALL lines
 
 DOS:
-- DO provide bbox for the actual text location
+- DO provide a tight bbox around the actual text or visual feature
+- DO surround the specific text characters for text/OCR-extracted values
+- DO surround the analyzed region for visual features (colors, shapes, logos)
 - DO use [0, 0, 0, 0] for fields not present in image
 
 DONTS:
 - DO NOT guess coordinates for unclear locations
-- DO NOT use pixel values - always use 0-1000 normalized range`;
-
-const RULES_BOUNDING_BOXES_TOON = (coordFields: string[]) => `
-BOUNDING BOXES:
-Provide coordinates showing WHERE each value appears in the image.
-
-COORDINATE SYSTEM:
-- Values normalized to 0-1000 range (0=top/left edge, 1000=bottom/right edge)
-- Output coordinates as separate fields: ${coordFields.join(', ')}
-- For multi-line values, use bbox that covers ALL lines
-
-DOS:
-- DO provide bbox for the actual text location
-- DO set all coordinate fields to 0 for fields not present in image
-
-DONTS:
-- DO NOT guess coordinates for unclear locations
-- DO NOT use pixel values - always use 0-1000 normalized range`;
+- DO NOT use pixel values - always use 0-1000 normalized range
+- DO NOT return coordinates outside 0-1000`;
 
 const RULES_CONFIDENCE = `
 CONFIDENCE SCORES:
@@ -193,21 +194,6 @@ DONTS:
 - DO NOT hallucinate items not visible on this page`;
 
 // =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-/**
- * Parse bboxOrder string to extract coordinate field names
- * e.g., "[x1, y1, x2, y2]" -> ["x1", "y1", "x2", "y2"]
- */
-function parseBboxOrderToFields(bboxOrder: string): string[] {
-	return bboxOrder
-		.replace(/[\[\]]/g, '')
-		.split(',')
-		.map(s => s.trim());
-}
-
-// =============================================================================
 // USER SCHEMA SECTION
 // =============================================================================
 
@@ -237,7 +223,7 @@ The descriptions define what to extract and any special handling rules.
 }
 
 // =============================================================================
-// OUTPUT FORMAT SECTION - Abstract placeholders, no domain examples
+// OUTPUT FORMAT SECTION
 // =============================================================================
 
 function generateOutputFormatSection(
@@ -265,17 +251,21 @@ function generateToonFormatSection(
 
 	fieldList.push('column_id', 'column_name', 'value', 'image_index');
 
-	const coordFields = featureFlags.boundingBoxes ? parseBboxOrderToFields(bboxOrder) : [];
+	// For TOON, use flat coordinate fields (models naturally output flat tabular fields)
+	const coordFieldNames = featureFlags.boundingBoxes ? parseBboxOrderToFields(bboxOrder) : [];
 	if (featureFlags.boundingBoxes) {
-		fieldList.push(...coordFields);
+		fieldList.push(...coordFieldNames);
 	}
 
 	if (featureFlags.confidenceScores) {
 		fieldList.push('confidence');
 	}
 
-	// Build abstract example rows using actual column IDs
-	const buildAbstractRow = (col: ColumnDefinition, rowIdx: number, imgIdx: number): string => {
+	// Sample bbox values as arrays of 4 numbers (spread into separate tab-delimited fields)
+	const sampleBboxes = [[120, 45, 380, 195], [50, 310, 420, 365], [200, 500, 650, 555], [30, 680, 490, 740]];
+
+	// Build example rows using actual column IDs with concrete values
+	const buildExampleRow = (col: ColumnDefinition, rowIdx: number, imgIdx: number, sampleIdx: number): string => {
 		const values: string[] = [];
 
 		if (featureFlags.multiRowExtraction) {
@@ -288,11 +278,12 @@ function generateToonFormatSection(
 		values.push(String(imgIdx));
 
 		if (featureFlags.boundingBoxes) {
-			values.push(...coordFields.map(f => `<${f}>`));
+			const bbox = sampleBboxes[sampleIdx % sampleBboxes.length];
+			values.push(...bbox.map(String));
 		}
 
 		if (featureFlags.confidenceScores) {
-			values.push('<conf>');
+			values.push('0.95');
 		}
 
 		return '  ' + values.join('\t');
@@ -304,20 +295,20 @@ function generateToonFormatSection(
 		// Show 2 logical rows with first 2 columns each
 		const cols = columns.slice(0, 2);
 		sampleRows = [
-			buildAbstractRow(cols[0], 0, 0),
-			buildAbstractRow(cols[1], 0, 0),
-			buildAbstractRow(cols[0], 1, 0),
-			buildAbstractRow(cols[1], 1, 0)
+			buildExampleRow(cols[0], 0, 0, 0),
+			buildExampleRow(cols[1], 0, 0, 1),
+			buildExampleRow(cols[0], 1, 0, 2),
+			buildExampleRow(cols[1], 1, 0, 3)
 		];
 	} else {
 		// Single row with all columns
-		sampleRows = columns.map(col => buildAbstractRow(col, 0, 0));
+		sampleRows = columns.map((col, idx) => buildExampleRow(col, 0, 0, idx));
 	}
 
 	const exampleCount = sampleRows.length;
 	const header = `extractions[${exampleCount}]{${fieldList.join(',')}}:`;
 
-	return `--- OUTPUT FORMAT ---
+	let section = `--- OUTPUT FORMAT ---
 
 FORMAT EXAMPLE (structure only - replace placeholders with actual extracted data):
 \`\`\`
@@ -327,9 +318,18 @@ ${sampleRows.join('\n')}
 
 Replace:
 - <extracted_value> with actual data from images (or null if not present)
-- <x1>, <y1>, <x2>, <y2> (or similar coordinate fields) with values 0-1000 (or 0 if not present)
-- <conf> with confidence 0.0-1.0
 - [${exampleCount}] with your actual extraction count`;
+
+	if (featureFlags.boundingBoxes) {
+		section += `\n- ${coordFieldNames.join(', ')} with actual 0-1000 normalized coordinates from the image (or 0 if not present)`;
+		section += `\n\nBBOX REMINDER: Coordinate fields (${coordFieldNames.join(', ')}) are integers 0-1000. 0=top/left edge, 1000=bottom/right edge. Use 0 for all four fields if value not present in image.`;
+	}
+
+	if (featureFlags.confidenceScores) {
+		section += `\n- confidence with actual 0.0-1.0 score`;
+	}
+
+	return section;
 }
 
 function generateJsonFormatSection(
@@ -337,7 +337,10 @@ function generateJsonFormatSection(
 	featureFlags: ExtractionFeatureFlags,
 	bboxOrder: string
 ): string {
-	const buildAbstractExample = (col: ColumnDefinition, rowIdx: number, imgIdx: number, isLast: boolean): string => {
+	// Sample bbox values for concrete examples
+	const sampleBboxes = ['[120, 45, 380, 195]', '[50, 310, 420, 365]', '[200, 500, 650, 555]', '[30, 680, 490, 740]'];
+
+	const buildExample = (col: ColumnDefinition, rowIdx: number, imgIdx: number, isLast: boolean, sampleIdx: number): string => {
 		let example = '    {\n';
 
 		if (featureFlags.multiRowExtraction) {
@@ -350,11 +353,11 @@ function generateJsonFormatSection(
 		example += `      "image_index": ${imgIdx}`;
 
 		if (featureFlags.boundingBoxes) {
-			example += `,\n      "bbox_2d": ${bboxOrder}`;
+			example += `,\n      "bbox_2d": ${sampleBboxes[sampleIdx % sampleBboxes.length]}`;
 		}
 
 		if (featureFlags.confidenceScores) {
-			example += ',\n      "confidence": <conf>';
+			example += ',\n      "confidence": 0.95';
 		}
 
 		example += '\n    }' + (isLast ? '' : ',');
@@ -365,18 +368,18 @@ function generateJsonFormatSection(
 	if (featureFlags.multiRowExtraction && columns.length >= 2) {
 		const cols = columns.slice(0, 2);
 		examples = [
-			buildAbstractExample(cols[0], 0, 0, false),
-			buildAbstractExample(cols[1], 0, 0, false),
-			buildAbstractExample(cols[0], 1, 0, false),
-			buildAbstractExample(cols[1], 1, 0, true)
+			buildExample(cols[0], 0, 0, false, 0),
+			buildExample(cols[1], 0, 0, false, 1),
+			buildExample(cols[0], 1, 0, false, 2),
+			buildExample(cols[1], 1, 0, true, 3)
 		];
 	} else {
 		examples = columns.map((col, idx) =>
-			buildAbstractExample(col, 0, 0, idx === columns.length - 1)
+			buildExample(col, 0, 0, idx === columns.length - 1, idx)
 		);
 	}
 
-	return `--- OUTPUT FORMAT ---
+	let section = `--- OUTPUT FORMAT ---
 
 FORMAT EXAMPLE (structure only - replace placeholders with actual extracted data):
 {
@@ -386,9 +389,18 @@ ${examples.join('\n')}
 }
 
 Replace:
-- <extracted_value> with actual data from images (or null if not present)
-- x1, y1, x2, y2 (or similar coordinate fields) with actual values 0-1000 (or 0 if not present)
-- <conf> with confidence 0.0-1.0`;
+- <extracted_value> with actual data from images (or null if not present)`;
+
+	if (featureFlags.boundingBoxes) {
+		section += `\n- bbox_2d values with actual 0-1000 normalized coordinates from the image (or [0, 0, 0, 0] if not present)`;
+		section += `\n\nBBOX REMINDER: bbox_2d must be ${bboxOrder} with integers 0-1000. 0=top/left edge, 1000=bottom/right edge.`;
+	}
+
+	if (featureFlags.confidenceScores) {
+		section += `\n- confidence with actual 0.0-1.0 score`;
+	}
+
+	return section;
 }
 
 // =============================================================================
@@ -424,12 +436,7 @@ export function buildModularPrompt(config: PromptBuilderConfig): string {
 	}
 
 	if (featureFlags.boundingBoxes) {
-		if (featureFlags.toonOutput) {
-			const coordFields = parseBboxOrderToFields(bboxOrder);
-			sections.push(RULES_BOUNDING_BOXES_TOON(coordFields));
-		} else {
-			sections.push(RULES_BOUNDING_BOXES(bboxOrder));
-		}
+		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
 	}
 
 	if (featureFlags.confidenceScores) {
@@ -495,12 +502,7 @@ DO NOT re-extract these items.`);
 	}
 
 	if (featureFlags.boundingBoxes) {
-		if (featureFlags.toonOutput) {
-			const coordFields = parseBboxOrderToFields(bboxOrder);
-			sections.push(RULES_BOUNDING_BOXES_TOON(coordFields));
-		} else {
-			sections.push(RULES_BOUNDING_BOXES(bboxOrder));
-		}
+		sections.push(RULES_BOUNDING_BOXES(bboxOrder));
 	}
 
 	if (featureFlags.confidenceScores) {
@@ -535,9 +537,10 @@ export function formatExtractionsAsToon(
 	}
 	fieldList.push('column_id', 'column_name', 'value', 'image_index');
 
+	// Use flat coordinate fields for TOON (models output flat tabular fields naturally)
+	const coordFieldNames = featureFlags.boundingBoxes ? parseBboxOrderToFields(bboxOrder) : [];
 	if (featureFlags.boundingBoxes) {
-		const coordFields = parseBboxOrderToFields(bboxOrder);
-		fieldList.push(...coordFields);
+		fieldList.push(...coordFieldNames);
 	}
 	if (featureFlags.confidenceScores) {
 		fieldList.push('confidence');
@@ -554,8 +557,9 @@ export function formatExtractionsAsToon(
 		values.push(e.value ?? 'null');
 		values.push(String(e.image_index ?? 0));
 
-		if (featureFlags.boundingBoxes && e.bbox_2d) {
-			values.push(...e.bbox_2d.map((v: number) => String(v)));
+		if (featureFlags.boundingBoxes && Array.isArray(e.bbox_2d)) {
+			// Spread bbox_2d array into separate flat fields
+			values.push(...e.bbox_2d.map(String));
 		} else if (featureFlags.boundingBoxes) {
 			values.push('0', '0', '0', '0');
 		}
