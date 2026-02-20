@@ -406,6 +406,19 @@ export class QueueWorker {
 			processing_started: new Date().toISOString()
 		});
 
+		// Clean up any existing extraction_rows from previous processing
+		const existingRows = await this.pb.collection('extraction_rows').getFullList({
+			filter: this.pb.filter('batch = {:batchId}', { batchId })
+		});
+		if (existingRows.length > 0) {
+			const deleteBatch = this.pb.createBatch();
+			for (const row of existingRows) {
+				deleteBatch.collection('extraction_rows').delete(row.id);
+			}
+			await deleteBatch.send();
+			console.log(`[Batch] Cleaned up ${existingRows.length} existing extraction_rows`);
+		}
+
 		try {
 			// Load project settings
 			const project = await this.pb.collection('projects').getOne(projectId);
@@ -612,10 +625,17 @@ export class QueueWorker {
 
 				// Add reminder for multi-page documents
 				if (allPages.length > 1) {
-					contentArray.push({
-						type: 'text',
-						text: `REMINDER: You have been given ${allPages.length} pages. Extract ALL matching items from ALL ${allPages.length} pages. Do not stop early.`
-					});
+					if (featureFlags.multiRowExtraction) {
+						contentArray.push({
+							type: 'text',
+							text: `REMINDER: You have been given ${allPages.length} pages. Extract ALL matching items from ALL ${allPages.length} pages. Do not stop early.`
+						});
+					} else {
+						contentArray.push({
+							type: 'text',
+							text: `REMINDER: These ${allPages.length} images show the SAME item. Extract each column ONCE across all images. Use image_index to indicate which image (0-based) contains each value.`
+						});
+					}
 				}
 
 				// Single LLM call with all pages

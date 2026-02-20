@@ -54,7 +54,8 @@ DONTS:
 - DO NOT invent, guess, or hallucinate data not visible in images
 - DO NOT copy example values - extract from actual images only
 - DO NOT add explanations, markdown, or text outside the output format
-- DO NOT modify, abbreviate, or paraphrase column identifiers`;
+- DO NOT modify, abbreviate, or paraphrase column identifiers
+- DO NOT force-fit values that don't match the field description - if nothing visible matches what the description asks for, use null`;
 
 // =============================================================================
 // DO/DON'T RULES - Feature-specific (conditionally included)
@@ -69,11 +70,13 @@ DOS:
 - DO extract ALL matching items from ALL pages - scan every page completely
 - DO follow user field descriptions for what constitutes a "row"
 - DO follow user field descriptions for which rows each field appears on
+- DO skip pages with no extractable items (cover pages, terms & conditions, blank pages)
 
 DONTS:
 - DO NOT stop early - extract until the last item on the last page
 - DO NOT create separate rows for document-level fields (unless user description says to)
-- DO NOT skip items - incomplete extraction is unacceptable`;
+- DO NOT skip items that are actually visible - incomplete extraction is unacceptable
+- DO NOT hallucinate or invent rows not actually visible - if a page has no matching items, that is correct, not an error`;
 
 const RULES_TOON_OUTPUT = `
 OUTPUT FORMAT: TOON
@@ -167,12 +170,19 @@ DONTS:
 
 const RULES_IMAGE_INDEX = `
 IMAGE INDEX:
-You may receive one or multiple images. The image_index tells the system which image each extracted value came from. This is used to display the correct image when reviewing extractions.
+If multiple images are provided, they show the SAME item from different angles or views.
+Combine information from ALL images into ONE set of extractions.
+Each column should appear exactly ONCE - use image_index to record which image it came from.
 
 DOS:
-- DO set image_index to the 0-based index of the image where data was found
-- DO use 0 for single image
-- DO use 0 for first image, 1 for second, etc. when multiple images`;
+- DO output each column exactly once
+- DO set image_index to the 0-based index of the image where the value is visible
+- DO use 0 for single image, 0 for first image, 1 for second, etc.
+- DO use the image where you have highest confidence if a value appears in multiple images
+
+DONTS:
+- DO NOT duplicate columns across images - extract each column only once
+- DO NOT extract the same field separately from each image`;
 
 const RULES_PER_PAGE = (currentPage: number, totalPages: number) => `
 PER-PAGE MODE (page ${currentPage} of ${totalPages}):
@@ -187,11 +197,11 @@ DOS:
 - DO extract from THIS PAGE ONLY
 - DO use row_index starting from 0
 - DO use image_index: 0 for all
-- DO return empty extraction if page has no extractable items
+- DO return empty extraction (count 0) if page has no extractable items (e.g., cover page, terms & conditions, blank page, headers/footers only)
 
 DONTS:
 - DO NOT re-extract items from previous pages
-- DO NOT hallucinate items not visible on this page`;
+- DO NOT hallucinate or invent items not visible on this page - an empty page is a valid result`;
 
 // =============================================================================
 // USER SCHEMA SECTION
@@ -293,12 +303,13 @@ function generateToonFormatSection(
 	let sampleRows: string[];
 	if (featureFlags.multiRowExtraction && columns.length >= 2) {
 		// Show 2 logical rows with first 2 columns each
+		// Row 1 uses image_index 1 to demonstrate items from different pages
 		const cols = columns.slice(0, 2);
 		sampleRows = [
 			buildExampleRow(cols[0], 0, 0, 0),
 			buildExampleRow(cols[1], 0, 0, 1),
-			buildExampleRow(cols[0], 1, 0, 2),
-			buildExampleRow(cols[1], 1, 0, 3)
+			buildExampleRow(cols[0], 1, 1, 2),
+			buildExampleRow(cols[1], 1, 1, 3)
 		];
 	} else {
 		// Single row with all columns
@@ -366,12 +377,13 @@ function generateJsonFormatSection(
 
 	let examples: string[];
 	if (featureFlags.multiRowExtraction && columns.length >= 2) {
+		// Row 1 uses image_index 1 to demonstrate items from different pages
 		const cols = columns.slice(0, 2);
 		examples = [
 			buildExample(cols[0], 0, 0, false, 0),
 			buildExample(cols[1], 0, 0, false, 1),
-			buildExample(cols[0], 1, 0, false, 2),
-			buildExample(cols[1], 1, 0, true, 3)
+			buildExample(cols[0], 1, 1, false, 2),
+			buildExample(cols[1], 1, 1, true, 3)
 		];
 	} else {
 		examples = columns.map((col, idx) =>
@@ -483,7 +495,7 @@ export function buildPerPagePrompt(config: PerPagePromptConfig): string {
 \`\`\`
 ${previousExtractions}
 \`\`\`
-DO NOT re-extract these items.`);
+Use these to maintain consistent formatting and understand document structure. DO NOT re-extract these items.`);
 	}
 
 	// 4. User schema (absolute priority)
